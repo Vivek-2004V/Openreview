@@ -3,18 +3,16 @@
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 import sys
-from typing import Sequence
+from collections.abc import Sequence
+from pathlib import Path
 
 from openreview import (
-    __version__,
-    ExitCode,
-    EXIT_SUCCESS,
     EXIT_FINDINGS_PRESENT,
     EXIT_INVALID_INPUT_OR_CONFIG,
+    EXIT_SUCCESS,
     EXIT_TOOL_FAILURE,
-    EXIT_INTERNAL_ERROR,
+    __version__,
 )
 from openreview.exit_codes import format_exit_codes_summary
 
@@ -247,7 +245,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         target_path = getattr(args, "path", ".")
         config_path = getattr(args, "config", None)
         try:
-            from openreview.config import load_config, ConfigError
+            from openreview.config import ConfigError, load_config
 
             cfg = load_config(path=config_path, repo_root=target_path)
         except ConfigError as exc:
@@ -255,7 +253,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             return EXIT_INVALID_INPUT_OR_CONFIG
 
         try:
-            from openreview.repo import inspect_git_status, NotAGitRepositoryError, GitError
+            from openreview.repo import (
+                GitError,
+                NotAGitRepositoryError,
+                inspect_git_status,
+            )
 
             repo_info = inspect_git_status(target_path)
         except NotAGitRepositoryError as exc:
@@ -322,16 +324,21 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         try:
             report = engine.execute_review(diff_request=diff_req)
-        except Exception as exc:
+        except (RuntimeError, ValueError, OSError) as exc:
             sys.stderr.write(f"Review execution error: {exc}\n")
             return EXIT_TOOL_FAILURE
 
         # Handle findings subcommand
         if is_findings_cmd:
             sev_filter = getattr(args, "severity", None)
-            findings_to_show = report.findings
+            findings_to_show = list(report.findings)
             if sev_filter:
-                findings_to_show = [f for f in findings_to_show if f.severity.value == sev_filter.lower()]
+                sev_levels = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
+                min_threshold = sev_levels.get(sev_filter.lower(), 0)
+                findings_to_show = [
+                    f for f in findings_to_show
+                    if sev_levels.get(f.severity.value.lower(), 0) >= min_threshold
+                ]
 
             if getattr(args, "format", "table") == "json":
                 import json
@@ -369,7 +376,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             try:
                 Path(out_path).write_text(final_text, encoding="utf-8")
                 print(f"Report successfully saved to {out_path}")
-            except Exception as exc:
+            except OSError as exc:
                 sys.stderr.write(f"Failed to write report to {out_path}: {exc}\n")
                 return EXIT_TOOL_FAILURE
         else:

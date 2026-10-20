@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import shutil
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, ClassVar
 
 from openreview.adapters.base import (
     ScannerAdapter,
@@ -29,11 +30,11 @@ def map_ruff_code_to_severity(code: str) -> Severity:
         return Severity.HIGH
     if code_upper.startswith("F"):  # Pyflakes logic defects & syntax
         return Severity.HIGH
-    if code_upper.startswith("E") or code_upper.startswith("W"):  # pycodestyle
+    if code_upper.startswith(("E", "W")):  # pycodestyle
         return Severity.LOW
     if code_upper.startswith("B"):  # flake8-bugbear design/bug risks
         return Severity.MEDIUM
-    if code_upper.startswith("I") or code_upper.startswith("D"):  # isort / pydocstyle
+    if code_upper.startswith(("I", "D")):  # isort / pydocstyle
         return Severity.INFO
     return Severity.MEDIUM
 
@@ -42,13 +43,23 @@ class RuffAdapter(ScannerAdapter):
     """Deterministic static analysis adapter for Ruff (Python)."""
 
     name: str = "ruff"
-    supported_extensions: set[str] = {".py", ".pyi"}
+    supported_extensions: ClassVar[set[str]] = {".py", ".pyi"}
 
     def __init__(self, binary_path: str = "ruff"):
         self.binary_path = binary_path
 
+    def _resolve_binary(self) -> str | None:
+        found = shutil.which(self.binary_path)
+        if found:
+            return found
+        import sys
+        venv_candidate = Path(sys.prefix) / "bin" / self.binary_path
+        if venv_candidate.is_file():
+            return str(venv_candidate)
+        return None
+
     def is_available(self) -> bool:
-        return shutil.which(self.binary_path) is not None
+        return self._resolve_binary() is not None
 
     def filter_target_files(self, files: Sequence[str]) -> list[str]:
         return [f for f in files if Path(f).suffix.lower() in self.supported_extensions]
@@ -65,7 +76,8 @@ class RuffAdapter(ScannerAdapter):
                 raw_output="",
             )
 
-        if not self.is_available():
+        binary = self._resolve_binary()
+        if not binary:
             return ScannerResult(
                 scanner_name=self.name,
                 status=ScannerStatus.NOT_FOUND,
@@ -75,7 +87,7 @@ class RuffAdapter(ScannerAdapter):
             )
 
         cmd = [
-            self.binary_path,
+            binary,
             "check",
             "--output-format=json",
             "--no-fix",
@@ -177,5 +189,5 @@ class RuffAdapter(ScannerAdapter):
                 rule_id=code,
                 references=refs,
             )
-        except Exception:
+        except (KeyError, TypeError, ValueError):
             return None
