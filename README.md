@@ -2,11 +2,21 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python: 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
-[![Tests: 117 Passing](https://img.shields.io/badge/tests-117%20passing-brightgreen)](tests/)
+[![Tests: 126 Passing](https://img.shields.io/badge/tests-126%20passing-brightgreen)](tests/)
 
 A **free-first, open-source, local-first AI code-review assistant** designed as a privacy-preserving alternative to SaaS tools like CodeRabbit.
 
-OpenReview AI runs deterministic static linters (Ruff, ESLint) and optional local LLMs (via Ollama) entirely on your developer workstation or self-hosted CI/CD without telemetry, proprietary API paywalls, or data exfiltration.
+OpenReview AI runs deterministic static linters (Ruff, ESLint, Bandit, Semgrep, REA) and optional local LLMs (via Ollama) entirely on your developer workstation or self-hosted CI/CD without telemetry, proprietary API paywalls, or data exfiltration.
+
+---
+
+## Product Roadmap
+
+### 1. Core Review Engine (First Priority - Completed & Live)
+- **Local Git Repository Review:** Seamless review of local working tree (staged & unstaged) and commit ranges.
+- **Changed Lines & Diff Analysis:** Line-level hunk mapping and validation ensuring reviews focus strictly on changed code.
+- **Bugs, Code Quality & Security Findings:** Deterministic scanner adapters (Ruff, ESLint, Bandit, Semgrep, REA binary inspector) + optional local AI (Ollama) with hallucination prevention.
+- **Terminal & JSON Output:** Rich terminal markdown reports, direct findings filters (`openreview findings`), and agent-native JSON (`openreview review --agent`) for coding agents (Antigravity, Codex).
 
 ---
 
@@ -150,7 +160,7 @@ OpenReview AI was developed using strict **Loop Engineering** and verified acros
 
 ```bash
 .venv/bin/pytest
-# ============================= 117 passed in 1.77s ==============================
+# ============================= 126 passed in 2.26s ==============================
 ```
 
 ## License
