@@ -1,0 +1,31 @@
+# Python virtual environments
+.venv/
+venv/
+ENV/
+
+# Python byte-code and caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Distribution and builds
+build/
+dist/
+*.egg-info/
+
+# IDE and OS
+.DS_Store
+.idea/
+.vscode/
+
+# Node modules
+node_modules/
+*.log
+
+# Keep rea directory preserved
+!rea/

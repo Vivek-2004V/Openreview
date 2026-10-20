@@ -1,0 +1,68 @@
+{
+  "schema_version": "1.0",
+  "report_id": "rep_golden_findings",
+  "created_at": "2026-10-19T12:00:00Z",
+  "repo_root": "/workspace/sample_repo",
+  "base_ref": "main",
+  "head_ref": "feature/defect",
+  "summary": {
+    "total_files_analyzed": 12,
+    "total_findings": 2,
+    "findings_by_severity": {
+      "critical": 1,
+      "high": 0,
+      "medium": 0,
+      "low": 0,
+      "info": 1,
+      "unknown": 0
+    },
+    "findings_by_origin": {
+      "static": 1,
+      "ai": 1,
+      "combined": 0
+    },
+    "scanners_run": ["ruff", "bandit"],
+    "scanners_failed": [],
+    "ai_enabled": true,
+    "ai_model": "qwen2.5-coder:7b"
+  },
+  "findings": [
+    {
+      "schema_version": "1.0",
+      "finding_id": "f_crit_001",
+      "title": "SQL Injection vulnerability in search query",
+      "severity": "critical",
+      "confidence": "high",
+      "origin": "static",
+      "path": "src/api/search.py",
+      "start_line": 42,
+      "end_line": 45,
+      "rule_id": "B608",
+      "evidence": "cursor.execute(f'SELECT * FROM items WHERE name = {user_input}')",
+      "explanation": "User input is formatted directly into a raw SQL query string without parameterization.",
+      "recommendation": "Use parameterized queries: cursor.execute('SELECT * FROM items WHERE name = %s', (user_input,))",
+      "references": [
+        "https://owasp.org/Top10/A03_2021-Injection/"
+      ],
+      "status": "open"
+    },
+    {
+      "schema_version": "1.0",
+      "finding_id": "f_info_002",
+      "title": "Use list comprehension for better readability",
+      "severity": "info",
+      "confidence": "medium",
+      "origin": "ai",
+      "path": "src/utils/formatters.py",
+      "start_line": 15,
+      "end_line": 18,
+      "rule_id": null,
+      "evidence": "res = []\nfor x in items:\n    res.append(x.strip())",
+      "explanation": "List comprehension is more idiomatic and concise in modern Python.",
+      "recommendation": "return [x.strip() for x in items]",
+      "references": [],
+      "status": "open"
+    }
+  ],
+  "tool_diagnostics": []
+}

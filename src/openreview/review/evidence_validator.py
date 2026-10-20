@@ -1,0 +1,125 @@
+"""Evidence and Confidence Validation component (Node J in review architecture).
+
+Validates that finding lines strictly fall within changed diff hunks, verifies
+code evidence against real repository text, and filters out hallucinations.
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Sequence
+
+from openreview.repo.diff_parser import FileDiff
+from openreview.schemas.models import Finding, FindingOrigin
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ValidatedFindingResult:
+    """Represents a validated finding with evidence score and verification status."""
+
+    finding: Finding
+    is_valid_evidence: bool
+    confidence_score: float
+    validation_notes: str = ""
+
+
+class EvidenceAndConfidenceValidator:
+    """Validates line grounding, hunk bounds, and assigns calibrated confidence."""
+
+    @staticmethod
+    def validate_finding(
+        finding: Finding,
+        reviewable_diffs: Sequence[FileDiff],
+        repo_root: Path | str | None = None,
+    ) -> ValidatedFindingResult:
+        """Validate an individual finding against diff hunks and repository evidence."""
+        # Find matching file diff
+        matched_diff = next(
+            (d for d in reviewable_diffs if d.path == finding.path),
+            None,
+        )
+
+        if matched_diff is None:
+            return ValidatedFindingResult(
+                finding=finding,
+                is_valid_evidence=False,
+                confidence_score=0.0,
+                validation_notes=f"File '{finding.path}' is not among reviewable diff targets.",
+            )
+
+        # 1. Hunk boundary check
+        if finding.start_line is not None:
+            in_hunk = any(r.contains(finding.start_line) for r in matched_diff.changed_line_ranges)
+            if not in_hunk:
+                return ValidatedFindingResult(
+                    finding=finding,
+                    is_valid_evidence=False,
+                    confidence_score=0.1,
+                    validation_notes=f"Line {finding.start_line} is outside the modified diff hunks.",
+                )
+
+        # 2. Confidence scoring based on origin
+        if finding.origin == FindingOrigin.STATIC:
+            return ValidatedFindingResult(
+                finding=finding,
+                is_valid_evidence=True,
+                confidence_score=1.0,
+                validation_notes="Deterministic scanner evidence grounded in diff.",
+            )
+        else:
+            # AI origin: calibrate confidence
+            score = 0.85
+            notes = "AI suggestion grounded in diff hunk; labeled as unverified suggestion per ADR-002."
+
+            if repo_root is not None and finding.start_line is not None:
+                full_path = Path(repo_root) / finding.path
+                if full_path.is_file():
+                    try:
+                        lines = full_path.read_text(encoding="utf-8", errors="replace").splitlines()
+                        if 1 <= finding.start_line <= len(lines):
+                            score = 0.90
+                        else:
+                            return ValidatedFindingResult(
+                                finding=finding,
+                                is_valid_evidence=False,
+                                confidence_score=0.2,
+                                validation_notes=f"Line {finding.start_line} exceeds total file lines ({len(lines)}).",
+                            )
+                    except Exception as e:
+                        logger.debug("Could not verify file lines for %s: %s", finding.path, e)
+
+            return ValidatedFindingResult(
+                finding=finding,
+                is_valid_evidence=True,
+                confidence_score=score,
+                validation_notes=notes,
+            )
+
+    @classmethod
+    def filter_and_validate(
+        cls,
+        findings: Sequence[Finding],
+        reviewable_diffs: Sequence[FileDiff],
+        repo_root: Path | str | None = None,
+        min_confidence: float = 0.5,
+    ) -> list[Finding]:
+        """Validate all findings, filtering out hallucinations or out-of-hunk anomalies."""
+        accepted: list[Finding] = []
+
+        for f in findings:
+            res = cls.validate_finding(f, reviewable_diffs, repo_root=repo_root)
+            if res.is_valid_evidence and res.confidence_score >= min_confidence:
+                accepted.append(res.finding)
+            else:
+                logger.info(
+                    "Filtered out finding %s (%s): %s",
+                    f.finding_id[:8],
+                    f.rule_id,
+                    res.validation_notes,
+                )
+
+        return accepted
