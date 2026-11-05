@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -17,14 +18,12 @@ from openreview.integrations.github_client import (
 )
 from openreview.integrations.github_webhook import (
     PullRequestEventData,
-    WebhookPayloadError,
     WebhookSignatureError,
     extract_pr_event_data,
     parse_webhook_event,
     verify_github_signature,
 )
 from openreview.integrations.inline_comments import (
-    format_inline_comment_body,
     map_findings_to_inline_comments,
 )
 from openreview.integrations.job_queue import JobStatus, ReviewJobQueue

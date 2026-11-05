@@ -2,18 +2,23 @@
 
 from __future__ import annotations
 
-import json
 import subprocess
 from pathlib import Path
 
 import pytest
 
 from openreview import EXIT_FINDINGS_PRESENT
+from openreview.adapters.base import (
+    ScannerAdapter,
+    ScannerContext,
+    ScannerResult,
+    ScannerStatus,
+)
 from openreview.cli import main
 from openreview.config import AIConfig, OpenReviewConfig, ScannersConfig
 from openreview.reports import render_json_report, render_markdown_report, validate_json_report_payload
 from openreview.review.engine import ReviewEngine
-from openreview.schemas.models import FindingOrigin, Severity
+from openreview.schemas.models import Finding, FindingOrigin, Severity
 
 
 @pytest.fixture
@@ -53,15 +58,6 @@ def seeded_defect_repo(tmp_path: Path) -> Path:
     clean_py.write_text(vulnerable_py_content, encoding="utf-8")
 
     return repo
-
-
-from openreview.adapters.base import (
-    ScannerAdapter,
-    ScannerContext,
-    ScannerResult,
-    ScannerStatus,
-)
-from openreview.schemas.models import Finding, FindingOrigin, Severity
 
 
 class SeededVulnerabilityScanner(ScannerAdapter):

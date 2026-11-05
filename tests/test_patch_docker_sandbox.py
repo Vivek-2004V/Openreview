@@ -17,9 +17,6 @@ from openreview.patch.docker_sandbox import (
 from openreview.patch.generator import generate_unified_patch
 from openreview.patch.sandbox import SandboxPatchTester
 
-# Check whether Docker binary and daemon are live and available
-DOCKER_AVAILABLE = DockerSandboxRunner().is_available()
-
 
 def test_sandbox_config_security_validation_invariants() -> None:
     """Verify DockerSandboxConfig enforces non-negotiable security controls."""
@@ -437,96 +434,3 @@ def test_snapshot_prevents_symlink_escape(tmp_path: Path) -> None:
     # External symlink must NEVER be copied into sandbox snapshot
     assert not (snapshot_dir / "evil_link.txt").exists()
 
-
-# ============================================================================
-# Live Docker Integration Tests (executed ONLY when Docker daemon is available)
-# ============================================================================
-
-
-@pytest.mark.skipif(
-    not DOCKER_AVAILABLE, reason="Docker daemon is not available on this host"
-)
-def test_live_docker_network_isolation(tmp_path: Path) -> None:
-    """Live Docker test: Verify outbound network calls are strictly blocked under --network none."""
-    snapshot_dir = tmp_path / "snapshot"
-    snapshot_dir.mkdir()
-    (snapshot_dir / "test.py").write_text("print('test')\n", encoding="utf-8")
-
-    runner = DockerSandboxRunner(config=DockerSandboxConfig(image="python:3.11-slim"))
-    # Try reaching out to Google DNS
-    res = runner.run_validation(
-        repository_snapshot=snapshot_dir,
-        test_command=[
-            "python3",
-            "-c",
-            "import urllib.request; urllib.request.urlopen('http://8.8.8.8', timeout=2)",
-        ],
-        timeout_seconds=5,
-    )
-
-    assert res.success is False
-    assert res.exit_code != 0
-
-
-@pytest.mark.skipif(
-    not DOCKER_AVAILABLE, reason="Docker daemon is not available on this host"
-)
-def test_live_docker_non_root_execution(tmp_path: Path) -> None:
-    """Live Docker test: Verify container executes under non-root UID 1000."""
-    snapshot_dir = tmp_path / "snapshot"
-    snapshot_dir.mkdir()
-
-    runner = DockerSandboxRunner(
-        config=DockerSandboxConfig(image="python:3.11-slim", user="1000:1000")
-    )
-    res = runner.run_validation(
-        repository_snapshot=snapshot_dir,
-        test_command=["id", "-u"],
-    )
-
-    assert res.success is True
-    assert res.stdout.strip() == "1000"
-
-
-@pytest.mark.skipif(
-    not DOCKER_AVAILABLE, reason="Docker daemon is not available on this host"
-)
-def test_live_docker_read_only_rootfs(tmp_path: Path) -> None:
-    """Live Docker test: Verify writes to container rootfs fail under --read-only."""
-    snapshot_dir = tmp_path / "snapshot"
-    snapshot_dir.mkdir()
-
-    runner = DockerSandboxRunner(config=DockerSandboxConfig(image="python:3.11-slim"))
-    res = runner.run_validation(
-        repository_snapshot=snapshot_dir,
-        test_command=["touch", "/etc/hacked.txt"],
-    )
-
-    assert res.success is False
-    assert res.exit_code != 0
-    assert "Read-only file system" in res.stderr
-
-
-@pytest.mark.skipif(
-    not DOCKER_AVAILABLE, reason="Docker daemon is not available on this host"
-)
-def test_live_docker_tmpfs_workspace_writable(tmp_path: Path) -> None:
-    """Live Docker test: Verify writes inside /workspace succeed while /snapshot is read-only."""
-    snapshot_dir = tmp_path / "snapshot"
-    snapshot_dir.mkdir()
-    (snapshot_dir / "data.txt").write_text("original\n", encoding="utf-8")
-
-    runner = DockerSandboxRunner(config=DockerSandboxConfig(image="python:3.11-slim"))
-
-    # Writing in /workspace succeeds; attempting write to /snapshot fails
-    test_script = (
-        "echo 'new_work' > /workspace/output.txt && touch /snapshot/tampered.txt"
-    )
-    res = runner.run_validation(
-        repository_snapshot=snapshot_dir,
-        test_command=["sh", "-c", test_script],
-    )
-
-    # Must fail because /snapshot is read-only
-    assert res.success is False
-    assert "Read-only file system" in res.stderr

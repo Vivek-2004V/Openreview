@@ -1,6 +1,5 @@
 """Unit tests for Markdown report renderer per E2-T5."""
 
-import pytest
 from openreview.reports import render_markdown_report
 from openreview.schemas import (
     Finding,

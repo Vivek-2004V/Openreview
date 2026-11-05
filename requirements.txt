@@ -1,4 +1,8 @@
-# Core Development & Test Dependencies
+# Core Application Runtime Dependencies
+PyJWT>=2.8.0
+cryptography>=41.0.0
+
+# Development & Test Dependencies
 pytest>=8.0.0
 ruff>=0.5.0
 

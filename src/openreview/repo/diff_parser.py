@@ -5,11 +5,9 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from enum import Enum
-from pathlib import Path
-from typing import Sequence
 
 from openreview.repo.diff_models import DiffRequest, DiffTarget
-from openreview.repo.git import GitError, run_git_command
+from openreview.repo.git import run_git_command
 
 
 class FileChangeType(str, Enum):

@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import io
 import json
 import logging
-from pathlib import Path
 
-from openreview.logging import JSONLogFormatter, RedactingFilter, configure_logging
+from openreview.logging import JSONLogFormatter, RedactingFilter
 from openreview.security.redaction import REDACTED_PLACEHOLDER
 
 

@@ -6,7 +6,6 @@ import logging
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Sequence
 
 from openreview.security.path_guard import validate_safe_path
 from openreview.security.subprocess_guard import validate_subprocess_args

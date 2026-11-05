@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import subprocess
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -18,7 +16,6 @@ from openreview.adapters.ai_base import (
     AIReviewResponse,
     AIReviewSuggestion,
     AIStatus,
-    CodeContextBlock,
     ModelProvider,
 )
 from openreview.adapters.base import (

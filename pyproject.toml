@@ -19,11 +19,14 @@ classifiers = [
     "Operating System :: OS Independent",
     "Topic :: Software Development :: Quality Assurance",
 ]
-dependencies = []
+dependencies = [
+    "PyJWT>=2.8.0",
+    "cryptography>=41.0.0",
+]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.0",
+    "pytest>=8.0.0",
     "ruff>=0.5.0",
 ]
 
@@ -38,3 +41,14 @@ minversion = "8.0"
 testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "-v --strict-markers"
+markers = [
+    "docker: live container isolation tests requiring Docker daemon and validator image",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+ignore = ["E501"]

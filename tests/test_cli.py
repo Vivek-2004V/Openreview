@@ -1,13 +1,11 @@
 """Tests for OpenReview AI CLI entry point and --help."""
 
-import pytest
 from openreview import __version__
 from openreview.cli import (
     EXIT_SUCCESS,
     EXIT_INVALID_INPUT_OR_CONFIG,
     EXIT_TOOL_FAILURE,
     main,
-    create_parser,
 )
 
 

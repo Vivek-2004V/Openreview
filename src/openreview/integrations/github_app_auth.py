@@ -13,8 +13,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import jwt
-from cryptography.hazmat.primitives import serialization
+try:
+    import jwt
+    from cryptography.hazmat.primitives import serialization
+
+    HAS_CRYPTO = True
+except ImportError:  # pragma: no cover
+    jwt = None  # type: ignore
+    serialization = None  # type: ignore
+    HAS_CRYPTO = False
 
 from openreview.integrations.github_client import GitHubClient
 
@@ -57,6 +64,11 @@ class GitHubAppAuth:
         private_key: str | bytes | Path,
         base_url: str = "https://api.github.com",
     ) -> None:
+        if not HAS_CRYPTO or jwt is None or serialization is None:
+            raise GitHubAuthError(
+                "GitHub App authentication requires 'PyJWT' and 'cryptography'. "
+                "Install them with: pip install PyJWT cryptography"
+            )
         self.app_id = str(app_id).strip()
         if not self.app_id:
             raise GitHubAuthError("app_id must be a non-empty string or integer")

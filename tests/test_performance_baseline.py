@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import time
-from pathlib import Path
 
-from openreview.repo.diff_models import DiffRequest, DiffTarget
 from openreview.repo.diff_parser import parse_unified_diff
 from openreview.reports.json_report import render_json_report, validate_json_report_payload
 from openreview.reports.markdown import render_markdown_report

@@ -1,7 +1,6 @@
 """Golden fixture tests verifying report schema consistency and renderer determinism per E2-T7."""
 
 from pathlib import Path
-import pytest
 from openreview.reports import (
     render_json_report,
     render_markdown_report,

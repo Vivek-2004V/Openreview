@@ -1,9 +1,7 @@
 """Unit tests for deterministic scanner adapters (Ruff, ESLint) per Epic E3."""
 
 import json
-from pathlib import Path
-from unittest.mock import MagicMock, patch
-import pytest
+from unittest.mock import patch
 
 from openreview.adapters import (
     ESLintAdapter,
@@ -11,9 +9,7 @@ from openreview.adapters import (
     RuffAdapter,
     ScannerAdapter,
     ScannerContext,
-    ScannerResult,
     ScannerStatus,
-    run_scanner_process,
 )
 from openreview.schemas import FindingOrigin, Severity
 

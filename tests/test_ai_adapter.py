@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import io
 import json
 import socket
 import urllib.error
@@ -10,22 +9,18 @@ import urllib.request
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from openreview.adapters.ai_base import (
     AIReviewRequest,
-    AIReviewResponse,
     AIReviewSuggestion,
     AIStatus,
     CodeContextBlock,
     ModelProvider,
 )
-from openreview.adapters.ollama import OllamaAdapter, build_review_prompt, parse_ai_json_response
-from openreview.repo.diff_parser import FileChangeType, FileDiff, Hunk, LineRange
+from openreview.adapters.ollama import OllamaAdapter, build_review_prompt
+from openreview.repo.diff_parser import FileChangeType, FileDiff, LineRange
 from openreview.review.ai_validator import validate_and_convert_ai_suggestions
 from openreview.review.context import (
-    extract_file_context,
-    merge_overlapping_ranges,
     select_review_context,
 )
 from openreview.schemas.models import FindingOrigin, FindingStatus, Severity
@@ -162,7 +157,7 @@ def test_secret_redaction_patterns() -> None:
     API_KEY = "secret_key_abcdef1234567890"
     PASSWORD = "SuperSecretPassword123!"
     BEARER = "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.doNotLeakThisSignature"
-    
+
     # Safe code
     def compute_sum(a, b):
         return a + b

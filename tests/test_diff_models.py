@@ -1,7 +1,6 @@
 """Unit tests for DiffRequest and DiffTarget models."""
 
 import pytest
-from pathlib import Path
 from openreview.repo import (
     DiffRequest,
     DiffRequestError,

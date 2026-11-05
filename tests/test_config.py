@@ -1,13 +1,9 @@
 """Unit tests for OpenReview configuration loading and validation."""
 
 import pytest
-from pathlib import Path
 from openreview.config import (
     ConfigError,
     OpenReviewConfig,
-    ReviewConfig,
-    ScannersConfig,
-    AIConfig,
     load_config,
     parse_config_dict,
 )

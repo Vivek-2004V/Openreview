@@ -2,15 +2,10 @@
 
 import subprocess
 import pytest
-from pathlib import Path
 from openreview.repo.git import (
-    GitCommandError,
-    GitError,
-    GitRepoInfo,
     NotAGitRepositoryError,
     detect_repo_root,
     inspect_git_status,
-    run_git_command,
     verify_revision_exists,
 )
 from openreview.cli import EXIT_INVALID_INPUT_OR_CONFIG, EXIT_SUCCESS, main

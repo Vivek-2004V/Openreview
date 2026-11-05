@@ -2,11 +2,9 @@
 
 import subprocess
 import pytest
-from pathlib import Path
 from openreview import (
     EXIT_SUCCESS,
     EXIT_INVALID_INPUT_OR_CONFIG,
-    EXIT_TOOL_FAILURE,
 )
 from openreview.cli import main
 

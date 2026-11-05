@@ -4,7 +4,6 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-import pytest
 
 from openreview.adapters.rea import ReaAdapter
 from openreview.config import OpenReviewConfig

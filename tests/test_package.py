@@ -1,8 +1,6 @@
 """Baseline tests verifying package integrity and structure."""
 
 import importlib
-import sys
-import openreview
 from openreview import __version__
 from openreview.cli import main
 

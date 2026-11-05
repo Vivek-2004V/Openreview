@@ -1,6 +1,5 @@
 """Unit tests for documented exit codes contract."""
 
-import pytest
 from openreview import (
     ExitCode,
     EXIT_SUCCESS,

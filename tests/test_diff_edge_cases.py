@@ -1,9 +1,7 @@
 """Unit tests for handling renames, deletions, binary, and oversized files per E2-T3."""
 
-import pytest
 from openreview.repo import (
     FileChangeType,
-    LineRange,
     parse_unified_diff,
 )
 
