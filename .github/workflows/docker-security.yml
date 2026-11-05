@@ -1,0 +1,47 @@
+name: Docker Sandbox Security & Integration
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  docker-validation:
+    name: Docker Execution Sandbox Isolation Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install -r requirements.txt
+
+      - name: Build Validator Docker Image
+        run: |
+          docker build -t openreview-patch-validator:latest -f Dockerfile.validator .
+
+      - name: Verify Validator Image Security Invariants
+        run: |
+          USER=$(docker image inspect openreview-patch-validator:latest --format '{{.Config.User}}')
+          if [ "$USER" = "root" ] || [ "$USER" = "0" ] || [ -z "$USER" ]; then
+            echo "SECURITY VIOLATION: Validator image must not run as root. Found user: $USER"
+            exit 1
+          fi
+          echo "Validator image non-root user verified: $USER"
+
+      - name: Execute Live Docker Integration Tests
+        env:
+          OPENREVIEW_REQUIRE_DOCKER: "1"
+        run: |
+          pytest -v tests/integration/test_docker_sandbox.py
