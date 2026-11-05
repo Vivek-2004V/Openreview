@@ -8,6 +8,7 @@ resource limits, and filesystem protection.
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,14 @@ from openreview.patch.sandbox import SandboxPatchTester
 # Check whether Docker binary, daemon, and the validator image are all live
 runner_check = DockerSandboxRunner()
 DOCKER_LIVE = runner_check.is_available() and runner_check.image_exists()
+LIVE_REQUIRED = os.environ.get("OPENREVIEW_REQUIRE_DOCKER", "0").lower() in ("1", "true", "yes")
+
+if LIVE_REQUIRED and not DOCKER_LIVE:
+    pytest.fail(
+        "Docker daemon or 'openreview-patch-validator:latest' image is required by "
+        "OPENREVIEW_REQUIRE_DOCKER=1 but is not available or not running. "
+        "Failing fast to prevent silent CI bypass."
+    )
 
 pytestmark = pytest.mark.skipif(
     not DOCKER_LIVE,
