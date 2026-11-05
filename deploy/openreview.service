@@ -1,0 +1,23 @@
+[Unit]
+Description=OpenReview AI GitHub App Webhook Server & Worker
+After=network.target
+
+[Service]
+Type=simple
+User=openreview
+Group=openreview
+WorkingDirectory=/opt/openreview
+EnvironmentFile=/etc/openreview/openreview.env
+ExecStart=/usr/local/bin/openreview server --host 0.0.0.0 --port 8000 --db /var/lib/openreview/jobs.db --worker
+Restart=always
+RestartSec=5s
+
+# Hardening measures
+ProtectSystem=full
+ProtectHome=true
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+

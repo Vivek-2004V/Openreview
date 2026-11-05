@@ -14,7 +14,7 @@ This document records the architectural decisions for OpenReview AI, following t
 - **Context:** Developers need immediate, private code reviews without cloud subscriptions, data privacy concerns, or recurring infrastructure costs. Building a multi-tenant cloud service introduces complex IAM, webhook queues, billing, and secret management before core review efficacy is proven.
 - **Decision:** Build OpenReview AI as a standalone local CLI tool first. Defer multi-tenant SaaS, web portals, and database microservices until local review precision and developer value are proven.
 - **Consequences:**
-  - Positive: Fast feedback loop, zero cloud infrastructure cost, 100% data privacy by default.
+  - Positive: Fast feedback loop, zero cloud infrastructure cost, local-first data privacy by default.
   - Negative: Team-level aggregated dashboards and background GitHub App webhooks are deferred to later milestones (Phase 7+).
 
 ---

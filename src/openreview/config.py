@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import json
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
-if sys.version_info >= (3, 11):
+if sys.version_info >= (3, 11):  # noqa: UP036
     import tomllib
 else:
     import tomli as tomllib  # type: ignore
@@ -44,6 +45,7 @@ class AIConfig:
 @dataclass(frozen=True)
 class PrivacyConfig:
     redact_secrets: bool = True
+    enforce_local_ai: bool = False
 
 
 @dataclass(frozen=True)
@@ -82,6 +84,7 @@ ALLOWED_SECTIONS: dict[str, dict[str, type]] = {
     },
     "privacy": {
         "redact_secrets": bool,
+        "enforce_local_ai": bool,
     },
     "reports": {
         "formats": list,
@@ -153,7 +156,9 @@ def parse_config_dict(raw: Mapping[str, Any]) -> OpenReviewConfig:
     )
 
 
-def load_config(path: str | Path | None = None, repo_root: str | Path | None = None) -> OpenReviewConfig:
+def load_config(
+    path: str | Path | None = None, repo_root: str | Path | None = None
+) -> OpenReviewConfig:
     """Load configuration from explicit path or default candidates in repo root."""
     if path is not None:
         target_path = Path(path)
@@ -162,7 +167,12 @@ def load_config(path: str | Path | None = None, repo_root: str | Path | None = N
         return _read_config_file(target_path)
 
     search_dir = Path(repo_root) if repo_root else Path.cwd()
-    candidate_names = [".openreview.toml", "openreview.toml", ".openreview.json", "openreview.json"]
+    candidate_names = [
+        ".openreview.toml",
+        "openreview.toml",
+        ".openreview.json",
+        "openreview.json",
+    ]
 
     for name in candidate_names:
         candidate = search_dir / name
@@ -188,9 +198,13 @@ def _read_config_file(file_path: Path) -> OpenReviewConfig:
         except Exception as exc:
             raise ConfigError(f"Malformed TOML in {file_path}: {exc}") from exc
     else:
-        raise ConfigError(f"Unsupported config format '{suffix}' for {file_path}. Use .toml or .json")
+        raise ConfigError(
+            f"Unsupported config format '{suffix}' for {file_path}. Use .toml or .json"
+        )
 
     if not isinstance(data, dict):
-        raise ConfigError(f"Root configuration must be a key-value mapping in {file_path}")
+        raise ConfigError(
+            f"Root configuration must be a key-value mapping in {file_path}"
+        )
 
     return parse_config_dict(data)

@@ -49,7 +49,7 @@ OpenReview AI orchestrates scanners as external subprocesses. It never links or 
 
 | Runtime / Engine | License | Communication Protocol | Privacy Profile |
 | :--- | :--- | :--- | :--- |
-| **Ollama** | MIT | Local HTTP REST (`http://127.0.0.1:11434/api/generate`) | 100% offline, local compute. No data sent to third parties. |
+| **Ollama** | MIT | Local HTTP REST (`http://127.0.0.1:11434/api/generate`) | Local compute by default on loopback. If configured with a remote endpoint, network transmission of code context occurs. |
 
 ---
 

@@ -5,8 +5,9 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from typing import Any
 
 
 class WebhookSignatureError(ValueError):
@@ -84,8 +85,14 @@ def parse_webhook_event(
     headers: Mapping[str, str],
     payload_bytes: bytes,
     secret: str | None = None,
+    allow_unauthenticated: bool = False,
 ) -> WebhookEvent:
-    """Parse, authenticate, and validate an incoming GitHub webhook request."""
+    """Parse, authenticate, and validate an incoming GitHub webhook request.
+
+    By default, requires a valid HMAC-SHA256 signature calculated against a non-empty secret.
+    Unauthenticated parsing is strictly prohibited unless explicitly enabled via
+    allow_unauthenticated=True (e.g. for synthetic unit tests).
+    """
     # Case-insensitive header lookup
     normalized_headers = {k.lower(): v for k, v in headers.items()}
 
@@ -97,15 +104,30 @@ def parse_webhook_event(
     if not delivery_id:
         raise WebhookPayloadError("Missing X-GitHub-Delivery header")
 
-    if secret is not None:
+    # Enforce signature verification
+    if not allow_unauthenticated:
+        if not secret or not secret.strip():
+            raise WebhookSignatureError(
+                "Webhook secret must be provided; unauthenticated webhook requests are strictly prohibited in production"
+            )
+        sig_header = normalized_headers.get("x-hub-signature-256")
+        if not sig_header or not verify_github_signature(
+            payload_bytes, sig_header, secret
+        ):
+            raise WebhookSignatureError(
+                "Invalid or missing X-Hub-Signature-256 signature"
+            )
+    elif secret is not None:
         sig_header = normalized_headers.get("x-hub-signature-256")
         if not verify_github_signature(payload_bytes, sig_header, secret):
-            raise WebhookSignatureError("Invalid or missing X-Hub-Signature-256 signature")
+            raise WebhookSignatureError(
+                "Invalid or missing X-Hub-Signature-256 signature"
+            )
 
     try:
         payload = json.loads(payload_bytes.decode("utf-8"))
-    except Exception as exc:
-        raise WebhookPayloadError(f"Malformed JSON payload: {exc}")
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise WebhookPayloadError(f"Malformed JSON payload: {exc}") from exc
 
     action = str(payload.get("action", ""))
     repo_data = payload.get("repository", {})
@@ -120,10 +142,28 @@ def parse_webhook_event(
     )
 
 
+def parse_and_verify_webhook_event(
+    headers: Mapping[str, str],
+    payload_bytes: bytes,
+    secret: str,
+) -> WebhookEvent:
+    """Production helper: strictly parses and verifies a GitHub webhook event.
+
+    Unconditionally requires a non-empty secret and valid HMAC-SHA256 signature.
+    """
+    if not secret or not secret.strip():
+        raise WebhookSignatureError("Webhook secret must be non-empty")
+    return parse_webhook_event(
+        headers, payload_bytes, secret=secret, allow_unauthenticated=False
+    )
+
+
 def extract_pr_event_data(event: WebhookEvent) -> PullRequestEventData:
     """Extract and validate pull request details from a WebhookEvent."""
     if event.event_type != "pull_request":
-        raise WebhookPayloadError(f"Expected event_type 'pull_request', got '{event.event_type}'")
+        raise WebhookPayloadError(
+            f"Expected event_type 'pull_request', got '{event.event_type}'"
+        )
 
     pr_dict = event.payload.get("pull_request")
     if not pr_dict:
@@ -143,7 +183,9 @@ def extract_pr_event_data(event: WebhookEvent) -> PullRequestEventData:
     base_ref = str(base_info.get("ref", "")).strip()
 
     if not head_sha or not base_sha:
-        raise WebhookPayloadError("Missing head or base commit SHA in pull request payload")
+        raise WebhookPayloadError(
+            "Missing head or base commit SHA in pull request payload"
+        )
 
     installation = event.payload.get("installation", {})
     inst_id = installation.get("id") if isinstance(installation, dict) else None

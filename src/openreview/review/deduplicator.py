@@ -7,7 +7,7 @@ strictly by severity (Critical -> High -> Medium -> Low -> Info) and file positi
 from __future__ import annotations
 
 import logging
-from typing import Sequence
+from collections.abc import Sequence
 
 from openreview.schemas.models import Finding, FindingOrigin, Severity
 
@@ -28,16 +28,32 @@ class DeduplicatorAndSeverityRanker:
 
     @staticmethod
     def deduplicate(findings: Sequence[Finding]) -> list[Finding]:
-        """Deduplicate findings based on finding_id or (path, start_line, rule_id)."""
+        """Deduplicate findings based on finding_id or (path, start_line, rule_id/title, origin)."""
         seen_ids: set[str] = set()
-        seen_locations: set[tuple[str, int | None, str | None]] = set()
+        seen_locations: set[tuple[str, int | None, str, FindingOrigin]] = set()
         deduped: list[Finding] = []
 
         for f in findings:
-            loc_key = (f.path, f.start_line, (f.rule_id or "").lower())
+            if f.finding_id in seen_ids:
+                logger.debug(
+                    "Deduplicated duplicate finding: %s (%s)",
+                    f.finding_id[:8],
+                    f.rule_id,
+                )
+                continue
 
-            if f.finding_id in seen_ids or loc_key in seen_locations:
-                logger.debug("Deduplicated duplicate finding: %s (%s)", f.finding_id[:8], f.rule_id)
+            rule_key = (f.rule_id or "").strip().lower()
+            if rule_key:
+                loc_key = (f.path, f.start_line, rule_key, f.origin)
+            else:
+                loc_key = (f.path, f.start_line, f.title.strip().lower(), f.origin)
+
+            if loc_key in seen_locations:
+                logger.debug(
+                    "Deduplicated duplicate finding: %s (%s)",
+                    f.finding_id[:8],
+                    f.rule_id,
+                )
                 continue
 
             seen_ids.add(f.finding_id)

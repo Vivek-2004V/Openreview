@@ -1,0 +1,44 @@
+version: "3.8"
+
+services:
+  # Webhook Ingestion Server
+  openreview-server:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: openreview-server
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - GITHUB_APP_ID=${GITHUB_APP_ID}
+      - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET}
+      - GITHUB_PRIVATE_KEY_PATH=/secrets/github-app-private-key.pem
+      - OPENREVIEW_JOBS_DB=/data/openreview_jobs.db
+    volumes:
+      - openreview-data:/data
+      - ./secrets:/secrets:ro
+    command: ["server", "--host", "0.0.0.0", "--port", "8000", "--db", "/data/openreview_jobs.db", "--worker"]
+
+  # Dedicated Background Worker (for high-volume scaling)
+  openreview-worker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: openreview-worker
+    restart: unless-stopped
+    environment:
+      - GITHUB_APP_ID=${GITHUB_APP_ID}
+      - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET}
+      - GITHUB_PRIVATE_KEY_PATH=/secrets/github-app-private-key.pem
+      - OPENREVIEW_JOBS_DB=/data/openreview_jobs.db
+    volumes:
+      - openreview-data:/data
+      - ./secrets:/secrets:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro  # Only if host container sandbox enabled
+    command: ["server", "--no-worker"]  # Or standalone worker loop
+
+volumes:
+  openreview-data:
+    driver: local
+

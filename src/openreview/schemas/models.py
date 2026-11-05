@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import hashlib
-import json
-from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from enum import Enum
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 SCHEMA_VERSION = "1.0"
 
@@ -79,6 +79,7 @@ class Finding:
     references: list[str] = field(default_factory=list)
     schema_version: str = SCHEMA_VERSION
     finding_id: str = field(default="")
+    is_pre_existing: bool = False
 
     def __post_init__(self) -> None:
         if not self.title.strip():
@@ -86,16 +87,24 @@ class Finding:
         if not self.path.strip():
             raise SchemaValidationError("Finding path cannot be empty")
         if self.start_line is not None and self.start_line < 1:
-            raise SchemaValidationError(f"start_line must be >= 1, got {self.start_line}")
+            raise SchemaValidationError(
+                f"start_line must be >= 1, got {self.start_line}"
+            )
         if self.end_line is not None:
             if self.start_line is None:
-                raise SchemaValidationError("start_line must be specified if end_line is set")
+                raise SchemaValidationError(
+                    "start_line must be specified if end_line is set"
+                )
             if self.end_line < self.start_line:
-                raise SchemaValidationError(f"end_line ({self.end_line}) cannot be less than start_line ({self.start_line})")
+                raise SchemaValidationError(
+                    f"end_line ({self.end_line}) cannot be less than start_line ({self.start_line})"
+                )
 
         # Automatically compute stable finding_id if not explicitly provided
         if not self.finding_id:
-            fid = compute_finding_id(self.path, self.rule_id, self.start_line, self.title)
+            fid = compute_finding_id(
+                self.path, self.rule_id, self.start_line, self.title
+            )
             object.__setattr__(self, "finding_id", fid)
 
     def to_dict(self) -> dict[str, Any]:
@@ -115,6 +124,7 @@ class Finding:
             "recommendation": self.recommendation,
             "references": list(self.references),
             "status": self.status.value,
+            "is_pre_existing": self.is_pre_existing,
         }
 
     @classmethod
@@ -136,11 +146,16 @@ class Finding:
                 recommendation=data.get("recommendation"),
                 references=list(data.get("references", [])),
                 status=FindingStatus(data.get("status", "open")),
+                is_pre_existing=bool(data.get("is_pre_existing", False)),
             )
         except KeyError as exc:
-            raise SchemaValidationError(f"Missing required finding field: {exc}") from exc
+            raise SchemaValidationError(
+                f"Missing required finding field: {exc}"
+            ) from exc
         except ValueError as exc:
-            raise SchemaValidationError(f"Invalid enum value in finding: {exc}") from exc
+            raise SchemaValidationError(
+                f"Invalid enum value in finding: {exc}"
+            ) from exc
 
 
 @dataclass(frozen=True)
@@ -155,6 +170,9 @@ class ReviewSummary:
     scanners_failed: list[str]
     ai_enabled: bool
     ai_model: str | None
+    new_findings_count: int = 0
+    pre_existing_findings_count: int = 0
+    ai_suggestions_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -170,6 +188,9 @@ class ReviewReport:
     head_ref: str | None = None
     tool_diagnostics: list[dict[str, Any]] = field(default_factory=list)
     schema_version: str = SCHEMA_VERSION
+    new_findings: list[Finding] = field(default_factory=list)
+    pre_existing_findings: list[Finding] = field(default_factory=list)
+    ai_suggestions: list[Finding] = field(default_factory=list)
 
     @classmethod
     def create(
@@ -184,27 +205,40 @@ class ReviewReport:
         base_ref: str | None = None,
         head_ref: str | None = None,
         tool_diagnostics: Sequence[dict[str, Any]] | None = None,
+        pre_existing_findings: Sequence[Finding] | None = None,
     ) -> ReviewReport:
         """Construct a complete ReviewReport with computed summary metrics."""
-        now_iso = datetime.now(timezone.utc).isoformat()
-        report_id = hashlib.sha256(f"{repo_root}:{now_iso}:{len(findings)}".encode("utf-8")).hexdigest()[:12]
+        now_iso = datetime.now(UTC).isoformat()
+        report_id = hashlib.sha256(
+            f"{repo_root}:{now_iso}:{len(findings)}".encode()
+        ).hexdigest()[:12]
+
+        all_pre_existing = list(
+            pre_existing_findings or [f for f in findings if f.is_pre_existing]
+        )
+        active_findings = [f for f in findings if not f.is_pre_existing]
+        new_findings = [f for f in active_findings if f.origin != FindingOrigin.AI]
+        ai_suggestions = [f for f in active_findings if f.origin == FindingOrigin.AI]
 
         by_severity: dict[str, int] = {s.value: 0 for s in Severity}
         by_origin: dict[str, int] = {o.value: 0 for o in FindingOrigin}
 
-        for f in findings:
+        for f in active_findings:
             by_severity[f.severity.value] = by_severity.get(f.severity.value, 0) + 1
             by_origin[f.origin.value] = by_origin.get(f.origin.value, 0) + 1
 
         summary = ReviewSummary(
             total_files_analyzed=total_files_analyzed,
-            total_findings=len(findings),
+            total_findings=len(active_findings),
             findings_by_severity=by_severity,
             findings_by_origin=by_origin,
             scanners_run=list(scanners_run or []),
             scanners_failed=list(scanners_failed or []),
             ai_enabled=ai_enabled,
             ai_model=ai_model,
+            new_findings_count=len(new_findings),
+            pre_existing_findings_count=len(all_pre_existing),
+            ai_suggestions_count=len(ai_suggestions),
         )
 
         return cls(
@@ -212,11 +246,14 @@ class ReviewReport:
             created_at=now_iso,
             repo_root=repo_root,
             summary=summary,
-            findings=list(findings),
+            findings=active_findings,
             base_ref=base_ref,
             head_ref=head_ref,
             tool_diagnostics=list(tool_diagnostics or []),
             schema_version=SCHEMA_VERSION,
+            new_findings=new_findings,
+            pre_existing_findings=all_pre_existing,
+            ai_suggestions=ai_suggestions,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -236,7 +273,16 @@ class ReviewReport:
                 "scanners_failed": self.summary.scanners_failed,
                 "ai_enabled": self.summary.ai_enabled,
                 "ai_model": self.summary.ai_model,
+                "new_findings": len(self.new_findings),
+                "pre_existing_findings": len(self.pre_existing_findings),
+                "ai_suggestions": len(self.ai_suggestions),
+                "new_findings_count": self.summary.new_findings_count,
+                "pre_existing_findings_count": self.summary.pre_existing_findings_count,
+                "ai_suggestions_count": self.summary.ai_suggestions_count,
             },
             "findings": [f.to_dict() for f in self.findings],
+            "new_findings": [f.to_dict() for f in self.new_findings],
+            "pre_existing_findings": [f.to_dict() for f in self.pre_existing_findings],
+            "ai_suggestions": [f.to_dict() for f in self.ai_suggestions],
             "tool_diagnostics": self.tool_diagnostics,
         }

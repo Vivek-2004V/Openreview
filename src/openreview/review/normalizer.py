@@ -7,7 +7,7 @@ structured AI suggestions into the canonical versioned Finding model.
 from __future__ import annotations
 
 import logging
-from typing import Sequence
+from collections.abc import Sequence
 
 from openreview.adapters.ai_base import AIReviewSuggestion
 from openreview.schemas.models import (
@@ -16,7 +16,6 @@ from openreview.schemas.models import (
     FindingOrigin,
     FindingStatus,
     Severity,
-    compute_finding_id,
 )
 
 logger = logging.getLogger(__name__)
@@ -78,22 +77,42 @@ class FindingNormalizer:
         path: str,
     ) -> Finding:
         """Normalize an AI-generated suggestion into an unverified Finding per ADR-002."""
-        sev = _parse_severity(suggestion.severity)
-        line = max(1, suggestion.line)
+        sev = _parse_severity(getattr(suggestion, "severity", Severity.MEDIUM))
+        start_line = getattr(suggestion, "start_line", None) or getattr(
+            suggestion, "line", None
+        )
+        end_line = getattr(suggestion, "end_line", None) or start_line
+        line = max(1, start_line) if start_line is not None else 1
 
-        title = f"{suggestion.rule_id}: AI Review Suggestion"
+        rule_id = getattr(suggestion, "rule_id", None)
+        title = getattr(suggestion, "title", None) or (
+            f"{rule_id}: AI Review Suggestion" if rule_id else "AI Review Suggestion"
+        )
+        explanation = (
+            getattr(suggestion, "explanation", None)
+            or getattr(suggestion, "message", "")
+        ).strip()
+        recommendation = getattr(suggestion, "recommendation", None) or getattr(
+            suggestion, "suggestion", None
+        )
+        target_path = (
+            path.strip()
+            or getattr(suggestion, "path", "")
+            or getattr(suggestion, "file_path", "")
+        )
+
         return Finding(
-            title=title,
-            explanation=suggestion.message.strip(),
-            path=path.strip(),
+            title=title.strip(),
+            explanation=explanation,
+            path=target_path.strip(),
             severity=sev,
-            confidence=Confidence.MEDIUM,
+            confidence=getattr(suggestion, "confidence", Confidence.MEDIUM),
             origin=FindingOrigin.AI,
             status=FindingStatus.UNVERIFIED,
             start_line=line,
-            end_line=line,
-            rule_id=suggestion.rule_id,
-            recommendation=suggestion.suggestion.strip() if suggestion.suggestion else None,
+            end_line=end_line or line,
+            rule_id=rule_id.strip() if rule_id else None,
+            recommendation=recommendation.strip() if recommendation else None,
         )
 
     @classmethod
@@ -107,8 +126,6 @@ class FindingNormalizer:
         normalized: list[Finding] = list(static_findings)
 
         for sugg, target_path in ai_suggestions:
-            normalized.append(
-                cls.normalize_ai_suggestion(sugg, path=target_path)
-            )
+            normalized.append(cls.normalize_ai_suggestion(sugg, path=target_path))
 
         return normalized

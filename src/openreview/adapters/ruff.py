@@ -53,6 +53,7 @@ class RuffAdapter(ScannerAdapter):
         if found:
             return found
         import sys
+
         venv_candidate = Path(sys.prefix) / "bin" / self.binary_path
         if venv_candidate.is_file():
             return str(venv_candidate)
@@ -86,18 +87,23 @@ class RuffAdapter(ScannerAdapter):
                 error_message="Executable 'ruff' not found in PATH. Install via 'pip install ruff'.",
             )
 
-        cmd = [
-            binary,
-            "check",
-            "--output-format=json",
-            "--no-fix",
-        ] + context.extra_args + target_files
+        cmd = (
+            [
+                binary,
+                "check",
+                "--output-format=json",
+                "--no-fix",
+            ]
+            + context.extra_args
+            + target_files
+        )
 
         exec_res = run_scanner_process(
             cmd=cmd,
             cwd=context.repo_root,
             timeout_seconds=context.timeout_seconds,
             max_output_bytes=context.max_output_bytes,
+            max_memory_bytes=context.max_memory_bytes,
         )
 
         if exec_res.status != ScannerStatus.SUCCESS:
@@ -138,7 +144,9 @@ class RuffAdapter(ScannerAdapter):
                 )
 
             for diag in diagnostics:
-                finding = self._normalize_diagnostic(diag, context.repo_root)
+                finding = self._normalize_diagnostic(
+                    diag, context.repo_root, context.changed_lines_by_file
+                )
                 if finding:
                     findings.append(finding)
 
@@ -151,7 +159,12 @@ class RuffAdapter(ScannerAdapter):
             raw_output=raw_output,
         )
 
-    def _normalize_diagnostic(self, diag: dict[str, Any], repo_root: Path) -> Finding | None:
+    def _normalize_diagnostic(
+        self,
+        diag: dict[str, Any],
+        repo_root: Path,
+        changed_lines_by_file: dict[str, set[int]] | None = None,
+    ) -> Finding | None:
         try:
             code = diag.get("code") or "RUFF"
             message = diag.get("message") or "Code issue detected"
@@ -177,6 +190,15 @@ class RuffAdapter(ScannerAdapter):
 
             severity = map_ruff_code_to_severity(code)
 
+            is_pre_existing = False
+            if changed_lines_by_file is not None and start_line is not None:
+                norm_rel = rel_path.replace("\\", "/").lstrip("./")
+                file_lines = changed_lines_by_file.get(
+                    norm_rel
+                ) or changed_lines_by_file.get(rel_path)
+                if file_lines is not None and start_line not in file_lines:
+                    is_pre_existing = True
+
             return Finding(
                 title=f"[{code}] {message}",
                 explanation=message,
@@ -188,6 +210,19 @@ class RuffAdapter(ScannerAdapter):
                 end_line=end_line,
                 rule_id=code,
                 references=refs,
+                is_pre_existing=is_pre_existing,
             )
         except (KeyError, TypeError, ValueError):
             return None
+
+    @staticmethod
+    def filter_findings_to_changed_lines(
+        findings: Sequence[Finding],
+        changed_lines: set[int],
+    ) -> list[Finding]:
+        """Filter a list of findings to only those whose start_line falls in changed_lines."""
+        return [
+            f
+            for f in findings
+            if f.start_line is not None and f.start_line in changed_lines
+        ]

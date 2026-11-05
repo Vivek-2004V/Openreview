@@ -34,9 +34,9 @@ Architecture Pipeline:
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Sequence
 
 from openreview.adapters.ai_base import AIReviewRequest, CodeContextBlock, ModelProvider
 from openreview.adapters.base import ScannerAdapter, ScannerContext
@@ -48,12 +48,10 @@ from openreview.config import OpenReviewConfig
 from openreview.integrations.inline_comments import (
     map_findings_to_inline_comments,
 )
-from openreview.patch.applier import export_patch_to_file
 from openreview.patch.generator import create_patch_for_finding
 from openreview.patch.models import PatchProposal
-from openreview.patch.sandbox import SandboxPatchTester
 from openreview.repo.diff_models import DiffRequest, DiffTarget
-from openreview.repo.diff_parser import FileDiff, ParsedDiff, extract_git_diff
+from openreview.repo.diff_parser import ParsedDiff, extract_git_diff
 from openreview.repo.git import GitRepoInfo, inspect_git_status
 from openreview.review.context import select_review_context
 from openreview.review.deduplicator import DeduplicatorAndSeverityRanker
@@ -97,6 +95,9 @@ class OrchestrationExecutionResult:
     # Node P (Fix proposals created from findings)
     proposals: list[PatchProposal] = field(default_factory=list)
 
+    # Categorized findings
+    pre_existing_findings: list[Finding] = field(default_factory=list)
+
 
 class CompleteReviewOrchestrator:
     """The central orchestrator driving the entire 16-node review pipeline."""
@@ -135,6 +136,7 @@ class CompleteReviewOrchestrator:
             self.ai_provider = OllamaAdapter(
                 endpoint=config.ai.endpoint,
                 default_model=config.ai.model,
+                enforce_loopback=getattr(config.privacy, "enforce_local_ai", False),
             )
         else:
             self.ai_provider = None
@@ -143,6 +145,7 @@ class CompleteReviewOrchestrator:
         self,
         diff_request: DiffRequest | None = None,
         generate_proposals: bool = True,
+        specific_files: Sequence[str] | None = None,
     ) -> OrchestrationExecutionResult:
         """Execute the full 16-node architecture pipeline."""
         # -------------------------------------------------------------------
@@ -164,7 +167,21 @@ class CompleteReviewOrchestrator:
         # -------------------------------------------------------------------
         parsed_diff = extract_git_diff(diff_request)
         reviewable_diffs = parsed_diff.reviewable_files
+
+        if specific_files:
+            spec_set = set(specific_files)
+            reviewable_diffs = [d for d in reviewable_diffs if d.path in spec_set]
+
         target_file_paths = [d.path for d in reviewable_diffs]
+
+        # Compute changed line numbers per file for changed-hunk filtering
+        changed_lines_by_file: dict[str, set[int]] = {}
+        for d in reviewable_diffs:
+            lines: set[int] = set()
+            for r in d.changed_line_ranges:
+                lines.update(range(r.start, r.end + 1))
+            changed_lines_by_file[d.path] = lines
+            changed_lines_by_file[d.path.replace("\\", "/").lstrip("./")] = lines
 
         # -------------------------------------------------------------------
         # [D] Context Engine (Bounded changed code + Secret Redaction)
@@ -177,7 +194,9 @@ class CompleteReviewOrchestrator:
 
         secrets_redacted_count = 0
         if self.config.privacy.redact_secrets and context_blocks:
-            context_blocks, secrets_redacted_count = redact_context_blocks(context_blocks)
+            context_blocks, secrets_redacted_count = redact_context_blocks(
+                context_blocks
+            )
 
         # -------------------------------------------------------------------
         # [H] Repository Rules and History
@@ -201,6 +220,7 @@ class CompleteReviewOrchestrator:
                     repo_root=self.repo_root,
                     target_files=filtered_files,
                     timeout_seconds=self.config.scanners.timeout_seconds,
+                    changed_lines_by_file=changed_lines_by_file,
                 )
                 res = scanner.run(ctx)
                 if res.is_successful:
@@ -224,7 +244,11 @@ class CompleteReviewOrchestrator:
             if ai_resp.is_successful and ai_resp.suggestions:
                 for sugg in ai_resp.suggestions:
                     # Map suggestion back to target file
-                    target_file = sugg.file_path or (target_file_paths[0] if target_file_paths else "")
+                    target_file = (
+                        getattr(sugg, "path", None)
+                        or getattr(sugg, "file_path", None)
+                        or (target_file_paths[0] if target_file_paths else "")
+                    )
                     ai_suggestion_tuples.append((sugg, target_file))
 
         # -------------------------------------------------------------------
@@ -237,40 +261,52 @@ class CompleteReviewOrchestrator:
         )
 
         # -------------------------------------------------------------------
-        # [J] Evidence and Confidence Validation
+        # [J] Evidence and Confidence Validation (Strict changed-hunk partitioning)
         # -------------------------------------------------------------------
-        validated_findings = EvidenceAndConfidenceValidator.filter_and_validate(
-            findings=normalized_findings,
-            reviewable_diffs=reviewable_diffs,
-            repo_root=self.repo_root,
-            min_confidence=0.5,
+        actionable_findings, pre_existing_findings = (
+            EvidenceAndConfidenceValidator.partition_and_validate(
+                findings=normalized_findings,
+                reviewable_diffs=reviewable_diffs,
+                repo_root=self.repo_root,
+                min_confidence=0.5,
+            )
         )
 
         # -------------------------------------------------------------------
         # [K] Deduplication and Severity Ranking
         # -------------------------------------------------------------------
-        ranked_findings = DeduplicatorAndSeverityRanker.deduplicate_and_rank(validated_findings)
+        ranked_actionable = DeduplicatorAndSeverityRanker.deduplicate_and_rank(
+            actionable_findings
+        )
+        ranked_pre_existing = DeduplicatorAndSeverityRanker.deduplicate_and_rank(
+            pre_existing_findings
+        )
 
         # -------------------------------------------------------------------
         # [L] Review Report
         # -------------------------------------------------------------------
         report = ReviewReport.create(
             repo_root=str(self.repo_root),
-            findings=ranked_findings,
+            findings=ranked_actionable,
             total_files_analyzed=len(target_file_paths),
             scanners_run=[s.name for s in self.scanners if s.is_available()],
             scanners_failed=scanner_failures,
-            ai_enabled=bool(self.config.ai.enabled and self.ai_provider and self.ai_provider.is_available()),
+            ai_enabled=bool(
+                self.config.ai.enabled
+                and self.ai_provider
+                and self.ai_provider.is_available()
+            ),
             ai_model=self.config.ai.model if self.config.ai.enabled else None,
             base_ref=diff_request.base_ref,
             head_ref=diff_request.head_ref or repo_info.head_ref,
+            pre_existing_findings=ranked_pre_existing,
         )
 
         # -------------------------------------------------------------------
-        # [M] Dashboard / PR Comments
+        # [M] Dashboard / PR Comments (mapped to actionable findings)
         # -------------------------------------------------------------------
         inline_comments, unmappable = map_findings_to_inline_comments(
-            findings=ranked_findings,
+            findings=ranked_actionable,
             parsed_diff=parsed_diff,
         )
 
@@ -278,8 +314,8 @@ class CompleteReviewOrchestrator:
         # [N, O, P] Human Approval, Isolated Sandbox, & Validated Fix Proposals
         # -------------------------------------------------------------------
         proposals: list[PatchProposal] = []
-        if generate_proposals and ranked_findings:
-            for finding in ranked_findings:
+        if generate_proposals and ranked_actionable:
+            for finding in ranked_actionable:
                 if finding.recommendation:
                     try:
                         prop = create_patch_for_finding(
@@ -288,8 +324,12 @@ class CompleteReviewOrchestrator:
                             replacement_text=finding.recommendation,
                         )
                         proposals.append(prop)
-                    except Exception as e:
-                        logger.debug("Could not generate patch proposal for %s: %s", finding.finding_id[:8], e)
+                    except (ValueError, OSError, RuntimeError) as e:
+                        logger.debug(
+                            "Could not generate patch proposal for %s: %s",
+                            finding.finding_id[:8],
+                            e,
+                        )
 
         return OrchestrationExecutionResult(
             repo_info=repo_info,
@@ -302,4 +342,5 @@ class CompleteReviewOrchestrator:
             inline_comments=inline_comments,
             unmappable_findings=unmappable,
             proposals=proposals,
+            pre_existing_findings=ranked_pre_existing,
         )

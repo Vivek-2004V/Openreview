@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import shutil
-import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Protocol, Sequence, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from openreview.schemas.models import Finding
 
@@ -30,7 +29,9 @@ class ScannerContext:
     target_files: list[str]
     timeout_seconds: int = 30
     max_output_bytes: int = 1_000_000
+    max_memory_bytes: int | None = 1024 * 1024 * 1024
     extra_args: list[str] = field(default_factory=list)
+    changed_lines_by_file: dict[str, set[int]] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.repo_root, Path):
@@ -38,7 +39,13 @@ class ScannerContext:
         if self.timeout_seconds <= 0:
             raise ValueError(f"timeout_seconds must be > 0, got {self.timeout_seconds}")
         if self.max_output_bytes <= 0:
-            raise ValueError(f"max_output_bytes must be > 0, got {self.max_output_bytes}")
+            raise ValueError(
+                f"max_output_bytes must be > 0, got {self.max_output_bytes}"
+            )
+        if self.max_memory_bytes is not None and self.max_memory_bytes <= 0:
+            raise ValueError(
+                f"max_memory_bytes must be > 0, got {self.max_memory_bytes}"
+            )
 
 
 @dataclass(frozen=True)

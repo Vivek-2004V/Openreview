@@ -89,5 +89,60 @@ Incoming HTTP POST requests must include:
 
 1. **Signature Verification:** Constant-time `hmac.compare_digest` prevents timing attacks on signatures.
 2. **Replay Protection:** Deduplication cache keys on `X-GitHub-Delivery` and `(repo_id, pr_number, head_sha)`.
-3. **Untrusted Forks:** PRs from external forks execute in ephemeral, unprivileged sandbox worktrees with network access restricted.
+3. **Untrusted Forks (Container Sandbox Isolation):** PRs from external forks execute inside a strictly hardened container sandbox (`DockerSandboxRunner`):
+   - Non-root UID/GID (`1000:1000`) with `--cap-drop ALL` and `no-new-privileges:true`.
+   - Complete network airgap (`--network none`) preventing exfiltration and unverified package downloads.
+   - Resource bounding: `--cpus 1.0`, `--memory 512m`, `--pids-limit 100`, and strict execution timeouts.
+   - Read-only source checkout mount (`:readonly`) and read-only container root (`--read-only`).
+   - Writable storage restricted to size-capped, non-executable tmpfs (`/tmp:rw,noexec,nosuid,size=64m`).
+   - Strict credential separation: GitHub App tokens and reporting credentials reside on the host worker and are never accessible within the scanner container. Zero Docker socket access.
 4. **Token Rotation:** GitHub App installation access tokens expire after 60 minutes and are never persisted to disk.
+
+---
+
+## 6. Production GitHub App Runtime & Authentication
+
+### 6.1 GitHub App RS256 JWT Generation & Installation Tokens
+OpenReview AI authenticates as an official GitHub App per RFC 7519 / GitHub App Specifications:
+- **JWT Generation:** Signs RS256 JSON Web Tokens with the App ID as issuer (`iss`), 60-second clock drift allowance (`iat`), and maximum 10-minute validity (`exp`).
+- **Token Exchange:** Calls `POST /app/installations/{installation_id}/access_tokens` using the bearer JWT.
+- **In-Memory Token Cache:** Cached tokens are proactively refreshed whenever within 5 minutes of expiration, ensuring zero API interruption while avoiding disk persistence.
+
+### 6.2 Persistent Job Queue & Durable Crash Recovery
+The review queue (`ReviewJobQueue`) provides SQLite-backed ACID persistence:
+- **Persistent Storage:** Queued tasks, delivery tracking, and execution histories survive worker restarts in `openreview_jobs.db`.
+- **Durable Recovery:** Upon restart, any tasks left in `PROCESSING` status are inspected. If retries remain (`attempts < max_retries`), they are automatically re-queued to `PENDING` to prevent dropped reviews.
+
+### 6.3 End-to-End Reporting Orchestration
+Reviews and Checks API runs are orchestrated synchronously via `PRReportingOrchestrator`:
+1. **Checks API Synchronization:** Creates check runs marked `in_progress` and updates them to `completed` (`success` or `failure`).
+2. **Review Decision Determination:** Dynamically selects `APPROVE`, `REQUEST_CHANGES`, or `COMMENT` based on severity metrics.
+3. **Diff-Hunk Inline Mapping:** Anchors comments strictly within PR diff hunks. In the event of a GitHub `422 Unprocessable Entity` response, gracefully falls back to appending findings to the top-level review body.
+
+---
+
+## 7. Production Deployment & Operations
+
+### CLI Server Invocation
+```bash
+# Start webhook server and embedded worker
+openreview server \
+  --host 0.0.0.0 \
+  --port 8000 \
+  --secret "$GITHUB_WEBHOOK_SECRET" \
+  --app-id "$GITHUB_APP_ID" \
+  --private-key /path/to/private-key.pem \
+  --db /data/openreview_jobs.db \
+  --worker
+```
+
+### Docker Compose Deployment
+```bash
+docker compose -f deploy/docker-compose.yml up -d
+```
+
+### Server Endpoints
+- `POST /webhook`: GitHub App delivery receiver (enforces HMAC signature unconditionally).
+- `GET /health` or `GET /healthz`: Health probe returning status and queue metrics.
+- `GET /status`: Job status and throughput metrics.
+- `GET /jobs/{job_id}`: Job inspection endpoint.

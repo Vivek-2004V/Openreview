@@ -162,6 +162,12 @@ def create_parser() -> OpenReviewArgumentParser:
         help="Filter findings by minimum severity.",
     )
     findings_parser.add_argument(
+        "--category",
+        choices=["all", "new", "pre-existing", "ai"],
+        default="new",
+        help="Filter findings by category: new (default), pre-existing, ai, or all.",
+    )
+    findings_parser.add_argument(
         "-f",
         "--format",
         choices=["table", "json"],
@@ -180,6 +186,70 @@ def create_parser() -> OpenReviewArgumentParser:
         action="store_true",
         default=False,
         help="Show detailed environment diagnosis.",
+    )
+
+    # Server command (GitHub App webhook server)
+    server_parser = subparsers.add_parser(
+        "server",
+        help="Run production GitHub App webhook server and background review worker.",
+    )
+    server_parser.add_argument(
+        "--host",
+        default="0.0.0.0",
+        help="Host address to bind webhook HTTP server (default: 0.0.0.0).",
+    )
+    server_parser.add_argument(
+        "-p",
+        "--port",
+        type=int,
+        default=8000,
+        help="Port to bind webhook HTTP server (default: 8000).",
+    )
+    server_parser.add_argument(
+        "--secret",
+        default=None,
+        help="GitHub webhook HMAC secret (defaults to GITHUB_WEBHOOK_SECRET env var).",
+    )
+    server_parser.add_argument(
+        "--db",
+        default="openreview_jobs.db",
+        help="Path to persistent SQLite database for review job queue (default: openreview_jobs.db).",
+    )
+    server_parser.add_argument(
+        "--app-id",
+        default=None,
+        help="GitHub App ID (defaults to GITHUB_APP_ID env var).",
+    )
+    server_parser.add_argument(
+        "--private-key",
+        default=None,
+        help="Path to GitHub App RSA private key .pem file (defaults to GITHUB_PRIVATE_KEY_PATH env var).",
+    )
+    server_parser.add_argument(
+        "--worker",
+        dest="worker",
+        action="store_true",
+        default=True,
+        help="Run embedded background review worker (default: True).",
+    )
+    server_parser.add_argument(
+        "--no-worker",
+        dest="worker",
+        action="store_false",
+        help="Disable embedded background review worker (run webhook ingestion only).",
+    )
+    server_parser.add_argument(
+        "-c",
+        "--config",
+        default=None,
+        help="Path to OpenReview configuration file.",
+    )
+    server_parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        default=False,
+        help="Enable verbose diagnostic logging.",
     )
 
     return parser
@@ -210,7 +280,12 @@ def run_doctor(verbose: bool = False) -> int:
                 found_path = str(venv_candidate)
         if not found_path and binary == "rea":
             # Check local sibling rea/scripts/rea.mjs
-            local_rea = Path(__file__).resolve().parent.parent.parent / "rea" / "scripts" / "rea.mjs"
+            local_rea = (
+                Path(__file__).resolve().parent.parent.parent
+                / "rea"
+                / "scripts"
+                / "rea.mjs"
+            )
             if local_rea.is_file() and shutil.which("node"):
                 found_path = f"node {local_rea}"
         status = f"OK ({found_path})" if found_path else "NOT FOUND (optional/adapter)"
@@ -219,6 +294,83 @@ def run_doctor(verbose: bool = False) -> int:
             all_ok = False
 
     return EXIT_SUCCESS if all_ok else EXIT_TOOL_FAILURE
+
+
+def run_server(args: argparse.Namespace) -> int:
+    """Run production GitHub App webhook server and optional review worker."""
+    import os
+
+    from openreview.config import ConfigError, OpenReviewConfig, load_config
+    from openreview.integrations import (
+        GitHubAppAuth,
+        GitHubWebhookServer,
+        ReviewJobQueue,
+        ReviewWorker,
+    )
+
+    secret = getattr(args, "secret", None) or os.environ.get("GITHUB_WEBHOOK_SECRET")
+    if not secret:
+        sys.stderr.write(
+            "Error: Webhook secret must be provided via --secret or GITHUB_WEBHOOK_SECRET environment variable.\n"
+        )
+        return EXIT_INVALID_INPUT_OR_CONFIG
+
+    config_path = getattr(args, "config", None)
+    try:
+        cfg = load_config(path=config_path) if config_path else OpenReviewConfig()
+    except ConfigError as exc:
+        sys.stderr.write(f"Configuration error: {exc}\n")
+        return EXIT_INVALID_INPUT_OR_CONFIG
+
+    db_path = getattr(args, "db", None) or os.environ.get(
+        "OPENREVIEW_JOBS_DB", "openreview_jobs.db"
+    )
+    queue = ReviewJobQueue(db_path=db_path)
+
+    app_id = getattr(args, "app_id", None) or os.environ.get("GITHUB_APP_ID")
+    private_key_path = getattr(args, "private_key", None) or os.environ.get(
+        "GITHUB_PRIVATE_KEY_PATH"
+    )
+
+    app_auth = None
+    if app_id and private_key_path:
+        try:
+            app_auth = GitHubAppAuth(app_id=app_id, private_key=private_key_path)
+            print(f"GitHub App authentication initialized (App ID: {app_id})")
+        except (ValueError, OSError) as exc:
+            sys.stderr.write(
+                f"Warning: Failed to initialize GitHub App authentication: {exc}\n"
+            )
+
+    worker = None
+    if getattr(args, "worker", True):
+        worker = ReviewWorker(
+            queue=queue,
+            config=cfg,
+            app_auth=app_auth,
+        )
+
+    server = GitHubWebhookServer(
+        queue=queue,
+        webhook_secret=secret,
+        host=getattr(args, "host", "0.0.0.0"),
+        port=getattr(args, "port", 8000),
+        worker=worker,
+        app_auth=app_auth,
+    )
+
+    print(
+        f"OpenReview AI GitHub App Server v{__version__} listening on {server.host}:{server.server_port}"
+    )
+    print(f"Job queue storage: {db_path} (pending jobs: {queue.queue_size})")
+
+    try:
+        server.start(background=False)
+    except KeyboardInterrupt:
+        print("\nShutting down server...")
+        server.stop()
+
+    return EXIT_SUCCESS
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -240,6 +392,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.subcommand == "doctor":
         return run_doctor(verbose=args.verbose)
+
+    if args.subcommand == "server":
+        return run_server(args)
 
     if args.subcommand in ("review", "findings") or args.subcommand is None:
         target_path = getattr(args, "path", ".")
@@ -331,28 +486,52 @@ def main(argv: Sequence[str] | None = None) -> int:
         # Handle findings subcommand
         if is_findings_cmd:
             sev_filter = getattr(args, "severity", None)
-            findings_to_show = list(report.findings)
+            cat_filter = getattr(args, "category", "new")
+
+            if cat_filter == "pre-existing":
+                findings_to_show = list(report.pre_existing_findings)
+            elif cat_filter == "ai":
+                findings_to_show = list(report.ai_suggestions)
+            elif cat_filter == "all":
+                findings_to_show = list(report.findings) + list(
+                    report.pre_existing_findings
+                )
+            else:  # "new"
+                findings_to_show = list(report.new_findings)
+
             if sev_filter:
-                sev_levels = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
+                sev_levels = {
+                    "critical": 4,
+                    "high": 3,
+                    "medium": 2,
+                    "low": 1,
+                    "info": 0,
+                }
                 min_threshold = sev_levels.get(sev_filter.lower(), 0)
                 findings_to_show = [
-                    f for f in findings_to_show
+                    f
+                    for f in findings_to_show
                     if sev_levels.get(f.severity.value.lower(), 0) >= min_threshold
                 ]
 
             if getattr(args, "format", "table") == "json":
                 import json
+
                 print(json.dumps([f.to_dict() for f in findings_to_show], indent=2))
             else:
                 if not findings_to_show:
                     print("No matching findings found.")
                 else:
-                    print(f"{'SEVERITY':<10} {'RULE ID':<22} {'LOCATION':<30} {'TITLE'}")
+                    print(
+                        f"{'SEVERITY':<10} {'RULE ID':<22} {'LOCATION':<30} {'TITLE'}"
+                    )
                     print("-" * 80)
                     for f in findings_to_show:
                         loc = f"{f.path}:{f.start_line}" if f.start_line else f.path
                         rule = f.rule_id or "generic"
-                        print(f"{f.severity.value.upper():<10} {rule:<22} {loc:<30} {f.title}")
+                        print(
+                            f"{f.severity.value.upper():<10} {rule:<22} {loc:<30} {f.title}"
+                        )
 
             return EXIT_FINDINGS_PRESENT if findings_to_show else EXIT_SUCCESS
 

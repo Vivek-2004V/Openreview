@@ -1,31 +1,101 @@
-# Python virtual environments
+# ==============================================================================
+# OpenReview AI - Git Ignore Specification
+# ==============================================================================
+
+# Python Virtual Environments
 .venv/
 venv/
 ENV/
+env/
+*.env/
 
-# Python byte-code and caches
+# Python Bytecode, Compilations & Caches
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
+.Python
+
+# Testing & Coverage Caches
+.pytest_cache/
 *.pytest_cache/
 .coverage
 htmlcov/
+coverage.xml
 .mypy_cache/
 .ruff_cache/
+.hypothesis/
 
-# Distribution and builds
+# Packaging, Builds & Eggs
 build/
 dist/
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
 *.egg-info/
+.installed.cfg
+*.egg
 
-# IDE and OS
+# Secrets, Environment Files & Credentials (Strictly Never Commit)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.cert
+*.crt
+*.pfx
+*.p12
+secrets/
+deploy/secrets/
+private-key.pem
+
+# Local Databases, State & Locks
+*.sqlite
+*.sqlite3
+*.db
+!tests/fixtures/*.sqlite
+!tests/fixtures/*.db
+rea/.turbo/
+rea/.cache/
+
+# Execution Sandbox Workspaces & Temporary Artifacts
+sandbox/
+tmp/
+temp/
+docker-output/
+openreview_patch_sandbox_*
+openreview_sandbox_out_*
+
+# Logs & Diagnostics
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Node / JS Dependencies (if present)
+node_modules/
+
+# OS-Specific Files
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE & Editor Configurations
 .idea/
 .vscode/
-
-# Node modules
-node_modules/
-*.log
-
-# Keep rea directory preserved
-!rea/
+*.swp
+*.swo
+*~

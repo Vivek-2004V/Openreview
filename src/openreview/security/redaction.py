@@ -1,4 +1,22 @@
-"""Secret and credential redaction engine per TRD Section 3.4 and Gate D."""
+"""Secret and credential redaction engine per TRD Section 3.4 and Gate D.
+
+IMPORTANT PRIVACY & SECURITY BOUNDARY NOTICE:
+Secret redaction in OpenReview AI is a regex-based heuristic and defense-in-depth
+filter designed to intercept common, standardized credential patterns prior to model
+dispatch.
+
+LIMITATIONS:
+1. Regex pattern matching CANNOT guarantee detection of every credential, proprietary
+   value, internal token, or sensitive identifier.
+2. Bespoke tokens, secrets without recognizable structural prefixes (such as high-entropy
+   random hex or base64 strings), custom database connection strings, and proprietary
+   internal identifiers are not matched by default regex rules.
+3. Code obfuscation, string concatenation, or non-standard variable names can evade
+   regex-based detection.
+4. Consequently, source code context dispatched to AI models is NOT guaranteed to be
+   completely secret-free. Developers and teams must not rely on redaction as a substitute
+   for keeping secrets and credentials out of source repositories.
+"""
 
 from __future__ import annotations
 
@@ -32,7 +50,9 @@ PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ),
     (
         "jwt_token",
-        re.compile(r"\beyJ[a-zA-Z0-9_-]{10,}\.eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\b"),
+        re.compile(
+            r"\beyJ[a-zA-Z0-9_-]{10,}\.eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\b"
+        ),
     ),
     (
         "bearer_token",
@@ -97,7 +117,9 @@ def redact_text(text: str) -> RedactionResult:
     )
 
 
-def redact_context_blocks(blocks: list[CodeContextBlock]) -> tuple[list[CodeContextBlock], int]:
+def redact_context_blocks(
+    blocks: list[CodeContextBlock],
+) -> tuple[list[CodeContextBlock], int]:
     """Apply secret redaction across a list of code context blocks."""
     redacted_blocks: list[CodeContextBlock] = []
     total_redactions = 0

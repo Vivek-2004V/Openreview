@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import shutil
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Sequence
+from typing import ClassVar
 
 from openreview.adapters.base import (
     ScannerAdapter,
@@ -26,7 +27,14 @@ class ESLintAdapter(ScannerAdapter):
     """Deterministic static analysis adapter for ESLint (JS/TS)."""
 
     name: str = "eslint"
-    supported_extensions: set[str] = {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"}
+    supported_extensions: ClassVar[set[str]] = {
+        ".js",
+        ".jsx",
+        ".ts",
+        ".tsx",
+        ".mjs",
+        ".cjs",
+    }
 
     def __init__(self, binary_path: str | None = None):
         self._binary_path = binary_path
@@ -75,6 +83,7 @@ class ESLintAdapter(ScannerAdapter):
             cwd=context.repo_root,
             timeout_seconds=context.timeout_seconds,
             max_output_bytes=context.max_output_bytes,
+            max_memory_bytes=context.max_memory_bytes,
         )
 
         if exec_res.status != ScannerStatus.SUCCESS:
@@ -111,7 +120,9 @@ class ESLintAdapter(ScannerAdapter):
                     try:
                         file_path = Path(file_path_raw)
                         if file_path.is_absolute():
-                            rel_path = file_path.relative_to(context.repo_root.resolve()).as_posix()
+                            rel_path = file_path.relative_to(
+                                context.repo_root.resolve()
+                            ).as_posix()
                         else:
                             rel_path = file_path.as_posix()
                     except ValueError:
@@ -128,6 +139,18 @@ class ESLintAdapter(ScannerAdapter):
                         eslint_sev = msg.get("severity", 1)  # 1 = warning, 2 = error
                         severity = Severity.HIGH if eslint_sev == 2 else Severity.MEDIUM
 
+                        is_pre_existing = False
+                        if (
+                            context.changed_lines_by_file is not None
+                            and line_num is not None
+                        ):
+                            norm_rel = rel_path.replace("\\", "/").lstrip("./")
+                            file_lines = context.changed_lines_by_file.get(
+                                norm_rel
+                            ) or context.changed_lines_by_file.get(rel_path)
+                            if file_lines is not None and line_num not in file_lines:
+                                is_pre_existing = True
+
                         findings.append(
                             Finding(
                                 title=f"[{rule_id}] {message_text}",
@@ -139,6 +162,7 @@ class ESLintAdapter(ScannerAdapter):
                                 start_line=line_num,
                                 end_line=end_line_num,
                                 rule_id=rule_id,
+                                is_pre_existing=is_pre_existing,
                             )
                         )
 
@@ -150,3 +174,15 @@ class ESLintAdapter(ScannerAdapter):
             exit_code=exec_res.exit_code,
             raw_output=raw_output,
         )
+
+    @staticmethod
+    def filter_findings_to_changed_lines(
+        findings: Sequence[Finding],
+        changed_lines: set[int],
+    ) -> list[Finding]:
+        """Filter a list of findings to only those whose start_line falls in changed_lines."""
+        return [
+            f
+            for f in findings
+            if f.start_line is not None and f.start_line in changed_lines
+        ]

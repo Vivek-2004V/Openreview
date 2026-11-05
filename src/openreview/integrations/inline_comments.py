@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
-from openreview.repo.diff_parser import FileDiff, ParsedDiff
+from openreview.repo.diff_parser import ParsedDiff
 from openreview.schemas.models import Finding, FindingOrigin
 
 
@@ -82,11 +83,14 @@ def map_findings_to_inline_comments(
         }
 
         # Multi-line comment support if start_line != target_line
-        if f.end_line and f.start_line and f.end_line > f.start_line:
-            # Check if start_line is also in diff
-            if is_line_in_diff_hunks(f.path, f.start_line, parsed_diff):
-                comment_dict["start_line"] = f.start_line
-                comment_dict["start_side"] = "RIGHT"
+        if (
+            f.end_line
+            and f.start_line
+            and f.end_line > f.start_line
+            and is_line_in_diff_hunks(f.path, f.start_line, parsed_diff)
+        ):
+            comment_dict["start_line"] = f.start_line
+            comment_dict["start_side"] = "RIGHT"
 
         inline_comments.append(comment_dict)
 

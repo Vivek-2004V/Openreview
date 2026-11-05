@@ -7,11 +7,16 @@ This document provides a comprehensive security review and threat model for depl
 ## 1. Threat Modeling & Attack Vectors
 
 ### Threat 1: Malicious Fork Pull Requests (Untrusted Code Execution)
-- **Risk:** An attacker submits a PR from an external fork containing malicious build scripts or exploit payloads.
+- **Risk:** An attacker submits a PR from an external fork containing malicious build scripts, poisoned linter configs (e.g. `.eslintrc`, `eslint-plugin-*`), or exploit payloads.
 - **Mitigation:**
-  - Review jobs execute inside an isolated ephemeral sandbox (`ReviewWorker`).
-  - GitHub App tokens provided to the worker have strictly scoped `Read-only` repository permissions.
-  - No secret environment variables or deployment keys are accessible to the worker process.
+  - Review jobs execute inside a hardened container isolation sandbox (`ReviewWorker` + `DockerSandboxRunner`):
+    - **Non-root execution:** Runs as unprivileged UID/GID `1000:1000` with `--cap-drop ALL` and `--security-opt no-new-privileges:true`.
+    - **No Docker socket access:** No access or bind mounts to `/var/run/docker.sock`.
+    - **Network airgap:** Network completely disabled during scanner analysis (`--network none`).
+    - **Resource limits:** Strict CPU (`--cpus 1.0`), memory (`--memory 512m`), process (`--pids-limit 100`), and execution time limits.
+    - **Read-only checkout:** Untrusted repository files mounted strictly read-only (`:readonly`).
+    - **Restricted temporary filesystem:** Root filesystem is read-only (`--read-only`); temporary scratch space is mounted via size-capped, non-executable tmpfs (`/tmp:rw,noexec,nosuid,size=64m`).
+    - **Separate credentials and reporting:** GitHub App credentials, webhooks, and Checks API reporting reside exclusively on the host worker. No secrets or tokens are ever mounted or passed into the container environment.
 
 ### Threat 2: Webhook Spoofing & Replay Attacks
 - **Risk:** Attacker sends fake `pull_request` webhooks to trigger denial of service or pollute review history.
@@ -39,7 +44,7 @@ This document provides a comprehensive security review and threat model for depl
 |---|---|:---:|
 | **Constant-time HMAC Verification** | `src/openreview/integrations/github_webhook.py` | **Verified** |
 | **Idempotent Queue Deduplication** | `src/openreview/integrations/job_queue.py` | **Verified** |
-| **Ephemeral Sandbox Isolation** | `src/openreview/integrations/worker.py` | **Verified** |
+| **Hardened Container Sandbox Isolation** | `src/openreview/integrations/sandbox.py` & `worker.py` | **Verified** |
 | **Inline Comment Hunk Filtering** | `src/openreview/integrations/inline_comments.py` | **Verified** |
 | **Secret Redaction in All Logs** | `src/openreview/logging.py` | **Verified** |
 | **Path Traversal Containment** | `src/openreview/security/path_guard.py` | **Verified** |

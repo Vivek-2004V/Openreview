@@ -7,9 +7,9 @@ code evidence against real repository text, and filters out hallucinations.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
 
 from openreview.repo.diff_parser import FileDiff
 from openreview.schemas.models import Finding, FindingOrigin
@@ -37,9 +37,14 @@ class EvidenceAndConfidenceValidator:
         repo_root: Path | str | None = None,
     ) -> ValidatedFindingResult:
         """Validate an individual finding against diff hunks and repository evidence."""
-        # Find matching file diff
+        # Find matching file diff (normalized POSIX comparison)
+        norm_path = finding.path.replace("\\", "/").lstrip("./")
         matched_diff = next(
-            (d for d in reviewable_diffs if d.path == finding.path),
+            (
+                d
+                for d in reviewable_diffs
+                if d.path.replace("\\", "/").lstrip("./") == norm_path
+            ),
             None,
         )
 
@@ -53,7 +58,9 @@ class EvidenceAndConfidenceValidator:
 
         # 1. Hunk boundary check
         if finding.start_line is not None:
-            in_hunk = any(r.contains(finding.start_line) for r in matched_diff.changed_line_ranges)
+            in_hunk = any(
+                r.contains(finding.start_line) for r in matched_diff.changed_line_ranges
+            )
             if not in_hunk:
                 return ValidatedFindingResult(
                     finding=finding,
@@ -79,7 +86,9 @@ class EvidenceAndConfidenceValidator:
                 full_path = Path(repo_root) / finding.path
                 if full_path.is_file():
                     try:
-                        lines = full_path.read_text(encoding="utf-8", errors="replace").splitlines()
+                        lines = full_path.read_text(
+                            encoding="utf-8", errors="replace"
+                        ).splitlines()
                         if 1 <= finding.start_line <= len(lines):
                             score = 0.90
                         else:
@@ -89,8 +98,10 @@ class EvidenceAndConfidenceValidator:
                                 confidence_score=0.2,
                                 validation_notes=f"Line {finding.start_line} exceeds total file lines ({len(lines)}).",
                             )
-                    except Exception as e:
-                        logger.debug("Could not verify file lines for %s: %s", finding.path, e)
+                    except OSError as e:
+                        logger.debug(
+                            "Could not verify file lines for %s: %s", finding.path, e
+                        )
 
             return ValidatedFindingResult(
                 finding=finding,
@@ -100,20 +111,48 @@ class EvidenceAndConfidenceValidator:
             )
 
     @classmethod
-    def filter_and_validate(
+    def partition_and_validate(
         cls,
         findings: Sequence[Finding],
         reviewable_diffs: Sequence[FileDiff],
         repo_root: Path | str | None = None,
         min_confidence: float = 0.5,
-    ) -> list[Finding]:
-        """Validate all findings, filtering out hallucinations or out-of-hunk anomalies."""
-        accepted: list[Finding] = []
+    ) -> tuple[list[Finding], list[Finding]]:
+        """Partition findings into (actionable_findings, pre_existing_findings).
+
+        - actionable_findings: Validated findings strictly within modified diff hunks.
+        - pre_existing_findings: Deterministic static findings located outside modified hunks.
+        """
+        actionable: list[Finding] = []
+        pre_existing: list[Finding] = []
 
         for f in findings:
             res = cls.validate_finding(f, reviewable_diffs, repo_root=repo_root)
             if res.is_valid_evidence and res.confidence_score >= min_confidence:
-                accepted.append(res.finding)
+                actionable.append(res.finding)
+            elif f.origin == FindingOrigin.STATIC and (
+                "outside the modified diff hunks" in res.validation_notes
+                or f.is_pre_existing
+            ):
+                pre_existing_finding = Finding(
+                    title=f.title,
+                    explanation=f.explanation,
+                    path=f.path,
+                    severity=f.severity,
+                    confidence=f.confidence,
+                    origin=f.origin,
+                    status=f.status,
+                    start_line=f.start_line,
+                    end_line=f.end_line,
+                    rule_id=f.rule_id,
+                    evidence=f.evidence,
+                    recommendation=f.recommendation,
+                    references=f.references,
+                    schema_version=f.schema_version,
+                    finding_id=f.finding_id,
+                    is_pre_existing=True,
+                )
+                pre_existing.append(pre_existing_finding)
             else:
                 logger.info(
                     "Filtered out finding %s (%s): %s",
@@ -122,4 +161,21 @@ class EvidenceAndConfidenceValidator:
                     res.validation_notes,
                 )
 
-        return accepted
+        return actionable, pre_existing
+
+    @classmethod
+    def filter_and_validate(
+        cls,
+        findings: Sequence[Finding],
+        reviewable_diffs: Sequence[FileDiff],
+        repo_root: Path | str | None = None,
+        min_confidence: float = 0.5,
+    ) -> list[Finding]:
+        """Validate all findings, returning only actionable findings within changed diff hunks."""
+        actionable, _ = cls.partition_and_validate(
+            findings=findings,
+            reviewable_diffs=reviewable_diffs,
+            repo_root=repo_root,
+            min_confidence=min_confidence,
+        )
+        return actionable

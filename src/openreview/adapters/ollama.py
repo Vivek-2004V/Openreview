@@ -1,11 +1,22 @@
-"""Ollama local AI model provider adapter per TRD Section 3.4."""
+"""Ollama local AI model provider adapter per TRD Section 3.4.
+
+Privacy & Boundary Characteristics:
+- By default, OllamaAdapter targets a local loopback interface (http://127.0.0.1:11434).
+- If configured with an arbitrary remote endpoint, code context is transmitted over
+  the network to that remote server.
+- When enforce_loopback=True, non-loopback endpoints raise a ValueError at initialization
+  and are blocked at review generation time.
+- A warning is emitted whenever an external non-loopback endpoint is configured.
+"""
 
 from __future__ import annotations
 
+import ipaddress
 import json
-import socket
+import logging
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any
 
@@ -15,9 +26,10 @@ from openreview.adapters.ai_base import (
     AIReviewSuggestion,
     AIStatus,
     CodeContextBlock,
-    ModelProvider,
 )
 from openreview.schemas.models import Confidence, Severity
+
+logger = logging.getLogger(__name__)
 
 
 SYSTEM_INSTRUCTION = """You are an expert, security-conscious code reviewer.
@@ -47,7 +59,9 @@ Return a JSON array of finding objects. Each object MUST have:
 """
 
 
-def build_review_prompt(blocks: list[CodeContextBlock], custom_instructions: str = "") -> str:
+def build_review_prompt(
+    blocks: list[CodeContextBlock], custom_instructions: str = ""
+) -> str:
     """Format review context blocks safely into an isolated review prompt."""
     parts = []
     if custom_instructions:
@@ -55,11 +69,15 @@ def build_review_prompt(blocks: list[CodeContextBlock], custom_instructions: str
 
     parts.append("Code Context to Review:\n")
     for block in blocks:
-        parts.append(f'<code_context path="{block.path}" start_line="{block.start_line}" end_line="{block.end_line}">')
+        parts.append(
+            f'<code_context path="{block.path}" start_line="{block.start_line}" end_line="{block.end_line}">'
+        )
         parts.append(block.content)
         parts.append("</code_context>\n")
 
-    parts.append("Analyze the code inside <code_context> tags above. Respond ONLY with the requested JSON array.")
+    parts.append(
+        "Analyze the code inside <code_context> tags above. Respond ONLY with the requested JSON array."
+    )
     return "\n".join(parts)
 
 
@@ -73,8 +91,7 @@ def parse_ai_json_response(raw_text: str) -> list[dict[str, Any]]:
     elif cleaned.startswith("```"):
         cleaned = cleaned[3:]
 
-    if cleaned.endswith("```"):
-        cleaned = cleaned[:-3]
+    cleaned = cleaned.removesuffix("```")
 
     cleaned = cleaned.strip()
 
@@ -100,16 +117,77 @@ def parse_ai_json_response(raw_text: str) -> list[dict[str, Any]]:
     return []
 
 
+def is_loopback_endpoint(endpoint: str) -> bool:
+    """Determine whether an endpoint URL targets a local loopback interface.
+
+    Returns True for localhost, 127.0.0.0/8, ::1, and 0.0.0.0.
+    Returns False for remote hostnames, LAN addresses, public IPs, or invalid URLs.
+    """
+    if not endpoint or not isinstance(endpoint, str):
+        return False
+    try:
+        candidate = endpoint if "://" in endpoint else f"http://{endpoint}"
+        parsed = urllib.parse.urlparse(candidate)
+        hostname = parsed.hostname
+        if not hostname:
+            return False
+        hostname = hostname.lower().strip("[]")
+        if hostname == "localhost":
+            return True
+        try:
+            ip = ipaddress.ip_address(hostname)
+            return ip.is_loopback or ip.is_unspecified
+        except ValueError:
+            return False
+    except (ValueError, TypeError, AttributeError):
+        return False
+
+
 class OllamaAdapter:
-    """ModelProvider implementation for local Ollama instances."""
+    """ModelProvider implementation for local Ollama instances per TRD Section 3.4.
+
+    Privacy & Network Characteristics:
+    - By default, connects to local loopback (http://127.0.0.1:11434).
+    - If configured with an arbitrary remote endpoint (e.g. http://ai.corp:11434), source
+      code context is transmitted over the network to that external host.
+    - If enforce_loopback=True (via privacy.enforce_local_ai), non-loopback endpoints are
+      rejected with a ValueError.
+    - A warning is logged whenever a non-loopback endpoint is configured.
+    """
 
     def __init__(
         self,
         endpoint: str = "http://127.0.0.1:11434",
         default_model: str = "qwen2.5-coder:7b",
+        enforce_loopback: bool = False,
     ) -> None:
         self.endpoint = endpoint.rstrip("/")
         self.default_model = default_model
+        self.enforce_loopback = enforce_loopback
+        self._is_loopback = is_loopback_endpoint(self.endpoint)
+
+        if not self._is_loopback:
+            if self.enforce_loopback:
+                raise ValueError(
+                    f"Privacy violation: Remote AI endpoint '{self.endpoint}' is rejected "
+                    "because local loopback enforcement is enabled (privacy.enforce_local_ai=true)."
+                )
+            logger.warning(
+                "Ollama endpoint '%s' is not a local loopback address (127.0.0.1/localhost). "
+                "Source code context will be transmitted across the network to a remote host. "
+                "This configuration is NOT air-gapped.",
+                self.endpoint,
+            )
+
+    @property
+    def is_loopback(self) -> bool:
+        """Return True if the endpoint targets the local loopback interface."""
+        return self._is_loopback
+
+    @property
+    def is_local(self) -> bool:
+        """Alias for is_loopback."""
+        return self._is_loopback
 
     @property
     def name(self) -> str:
@@ -117,18 +195,32 @@ class OllamaAdapter:
 
     def is_available(self, timeout: float = 2.0) -> bool:
         """Check whether Ollama daemon is reachable."""
+        if self.enforce_loopback and not self._is_loopback:
+            return False
         url = f"{self.endpoint}/api/tags"
         req = urllib.request.Request(url, method="GET")
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return resp.status == 200
-        except (urllib.error.URLError, socket.timeout, TimeoutError, OSError):
+        except (urllib.error.URLError, TimeoutError, OSError):
             return False
 
     def generate_suggestions(self, request: AIReviewRequest) -> AIReviewResponse:
         """Submit code context to Ollama /api/generate and parse findings."""
         start_time = time.perf_counter()
         model_name = request.model or self.default_model
+
+        if self.enforce_loopback and not self._is_loopback:
+            return AIReviewResponse(
+                provider_name=self.name,
+                model_name=model_name,
+                status=AIStatus.ERROR,
+                duration_seconds=0.0,
+                error_message=(
+                    f"Privacy violation: Remote AI endpoint '{self.endpoint}' is rejected "
+                    "because local loopback enforcement is active."
+                ),
+            )
 
         if not request.blocks:
             return AIReviewResponse(
@@ -139,7 +231,9 @@ class OllamaAdapter:
                 suggestions=[],
             )
 
-        prompt = build_review_prompt(request.blocks, custom_instructions=request.system_prompt)
+        prompt = build_review_prompt(
+            request.blocks, custom_instructions=request.system_prompt
+        )
 
         payload = {
             "model": model_name,
@@ -186,7 +280,7 @@ class OllamaAdapter:
                 duration_seconds=duration,
                 error_message=f"Ollama HTTP error {exc.code}: {exc.reason}",
             )
-        except (socket.timeout, TimeoutError) as exc:
+        except TimeoutError as exc:
             duration = time.perf_counter() - start_time
             return AIReviewResponse(
                 provider_name=self.name,
@@ -204,7 +298,7 @@ class OllamaAdapter:
                 duration_seconds=duration,
                 error_message=f"Ollama service unavailable at {self.endpoint}: {exc.reason}",
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             duration = time.perf_counter() - start_time
             return AIReviewResponse(
                 provider_name=self.name,
@@ -231,7 +325,7 @@ class OllamaAdapter:
         # Parse structured findings from raw_response
         try:
             items = parse_ai_json_response(raw_response)
-        except Exception as exc:
+        except (json.JSONDecodeError, ValueError, TypeError) as exc:
             return AIReviewResponse(
                 provider_name=self.name,
                 model_name=model_name,
@@ -269,8 +363,14 @@ class OllamaAdapter:
             # Parse line numbers safely
             start_l = item.get("start_line")
             end_l = item.get("end_line")
-            start_int = int(start_l) if isinstance(start_l, (int, float)) and start_l > 0 else None
-            end_int = int(end_l) if isinstance(end_l, (int, float)) and end_l > 0 else None
+            start_int = (
+                int(start_l)
+                if isinstance(start_l, (int, float)) and start_l > 0
+                else None
+            )
+            end_int = (
+                int(end_l) if isinstance(end_l, (int, float)) and end_l > 0 else None
+            )
             if start_int and end_int and end_int < start_int:
                 end_int = start_int
 

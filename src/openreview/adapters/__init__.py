@@ -13,11 +13,12 @@ from openreview.adapters.base import (
     ScannerStatus,
 )
 from openreview.adapters.eslint import ESLintAdapter
-from openreview.adapters.ollama import OllamaAdapter
+from openreview.adapters.ollama import OllamaAdapter, is_loopback_endpoint
 from openreview.adapters.process_runner import (
     ProcessExecutionResult,
     run_scanner_process,
 )
+from openreview.adapters.rea import ReaAdapter
 from openreview.adapters.ruff import RuffAdapter
 
 __all__ = [
@@ -30,11 +31,12 @@ __all__ = [
     "ModelProvider",
     "OllamaAdapter",
     "ProcessExecutionResult",
+    "ReaAdapter",
     "RuffAdapter",
     "ScannerAdapter",
     "ScannerContext",
     "ScannerResult",
     "ScannerStatus",
+    "is_loopback_endpoint",
     "run_scanner_process",
 ]
-

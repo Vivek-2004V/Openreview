@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from openreview.schemas.models import (
     SCHEMA_VERSION,
@@ -30,7 +31,9 @@ def validate_json_report_payload(payload: str | Mapping[str, Any]) -> ReviewRepo
     elif isinstance(payload, Mapping):
         data = dict(payload)
     else:
-        raise SchemaValidationError(f"Expected str or Mapping, got {type(payload).__name__}")
+        raise SchemaValidationError(
+            f"Expected str or Mapping, got {type(payload).__name__}"
+        )
 
     if not isinstance(data, dict):
         raise SchemaValidationError("Root report JSON must be a key-value object")
@@ -43,7 +46,9 @@ def validate_json_report_payload(payload: str | Mapping[str, Any]) -> ReviewRepo
 
     for field_name in ["report_id", "created_at", "repo_root", "summary", "findings"]:
         if field_name not in data:
-            raise SchemaValidationError(f"Missing required report field: '{field_name}'")
+            raise SchemaValidationError(
+                f"Missing required report field: '{field_name}'"
+            )
 
     summary_raw = data["summary"]
     if not isinstance(summary_raw, dict):
@@ -61,7 +66,9 @@ def validate_json_report_payload(payload: str | Mapping[str, Any]) -> ReviewRepo
         try:
             parsed_findings.append(Finding.from_dict(raw_f))
         except SchemaValidationError as exc:
-            raise SchemaValidationError(f"Finding at index {idx} is invalid: {exc}") from exc
+            raise SchemaValidationError(
+                f"Finding at index {idx} is invalid: {exc}"
+            ) from exc
 
     # Cross-field consistency check
     claimed_total = summary_raw.get("total_findings")
@@ -70,6 +77,25 @@ def validate_json_report_payload(payload: str | Mapping[str, Any]) -> ReviewRepo
         raise SchemaValidationError(
             f"Summary total_findings ({claimed_total}) does not match findings count ({actual_total})"
         )
+
+    from openreview.schemas.models import FindingOrigin
+
+    new_findings = [
+        f
+        for f in parsed_findings
+        if f.origin != FindingOrigin.AI and not f.is_pre_existing
+    ]
+    ai_suggestions = [f for f in parsed_findings if f.origin == FindingOrigin.AI]
+
+    raw_pre_existing = data.get("pre_existing_findings", [])
+    parsed_pre_existing: list[Finding] = []
+    if isinstance(raw_pre_existing, list):
+        for raw_f in raw_pre_existing:
+            if isinstance(raw_f, dict):
+                try:
+                    parsed_pre_existing.append(Finding.from_dict(raw_f))
+                except SchemaValidationError:
+                    pass
 
     summary = ReviewSummary(
         total_files_analyzed=summary_raw.get("total_files_analyzed", 0),
@@ -80,6 +106,17 @@ def validate_json_report_payload(payload: str | Mapping[str, Any]) -> ReviewRepo
         scanners_failed=list(summary_raw.get("scanners_failed", [])),
         ai_enabled=summary_raw.get("ai_enabled", False),
         ai_model=summary_raw.get("ai_model"),
+        new_findings_count=summary_raw.get(
+            "new_findings_count", summary_raw.get("new_findings", len(new_findings))
+        ),
+        pre_existing_findings_count=summary_raw.get(
+            "pre_existing_findings_count",
+            summary_raw.get("pre_existing_findings", len(parsed_pre_existing)),
+        ),
+        ai_suggestions_count=summary_raw.get(
+            "ai_suggestions_count",
+            summary_raw.get("ai_suggestions", len(ai_suggestions)),
+        ),
     )
 
     return ReviewReport(
@@ -92,4 +129,7 @@ def validate_json_report_payload(payload: str | Mapping[str, Any]) -> ReviewRepo
         summary=summary,
         findings=parsed_findings,
         tool_diagnostics=data.get("tool_diagnostics", []),
+        new_findings=new_findings,
+        pre_existing_findings=parsed_pre_existing,
+        ai_suggestions=ai_suggestions,
     )

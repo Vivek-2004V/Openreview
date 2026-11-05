@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import difflib
+import hashlib
 from pathlib import Path
 
 from openreview.patch.models import PatchProposal, PatchValidationError
@@ -16,6 +17,7 @@ def generate_unified_patch(
     title: str = "",
     description: str = "",
     finding_id: str | None = None,
+    original_file_sha256: str | None = None,
 ) -> PatchProposal:
     """Generate a standard Git-compatible unified diff proposal between original and modified code."""
     norm_path = target_file.replace("\\", "/").strip().lstrip("./")
@@ -35,11 +37,20 @@ def generate_unified_patch(
     )
 
     if not diff_lines:
-        raise PatchValidationError("No difference between original and replacement code")
+        raise PatchValidationError(
+            "No difference between original and replacement code"
+        )
 
     diff_text = "".join(diff_lines)
     patch_title = title or f"Fix proposed for {norm_path}"
-    patch_desc = description or f"Automated patch addressing finding {finding_id or 'generic'}"
+    patch_desc = (
+        description or f"Automated patch addressing finding {finding_id or 'generic'}"
+    )
+
+    computed_sha256 = (
+        original_file_sha256
+        or hashlib.sha256(original_code.encode("utf-8")).hexdigest()
+    )
 
     return PatchProposal(
         patch_id="",  # Auto-generated in __post_init__
@@ -50,6 +61,7 @@ def generate_unified_patch(
         original_snippet=original_code,
         replacement_snippet=replacement_code,
         finding_id=finding_id,
+        original_file_sha256=computed_sha256,
     )
 
 
@@ -63,16 +75,21 @@ def create_patch_for_finding(
     """Construct a PatchProposal targeting the specific line range of a review finding."""
     file_path = repo_root / finding.path
     if not file_path.is_file():
-        raise PatchValidationError(f"Target file for finding does not exist: {file_path}")
+        raise PatchValidationError(
+            f"Target file for finding does not exist: {file_path}"
+        )
 
     full_content = file_path.read_text(encoding="utf-8", errors="replace")
+    original_sha256 = hashlib.sha256(full_content.encode("utf-8")).hexdigest()
     lines = full_content.splitlines(keepends=True)
 
     start_line = finding.start_line or 1
     end_line = finding.end_line or start_line
 
     if start_line < 1 or start_line > len(lines):
-        raise PatchValidationError(f"Finding start_line {start_line} is outside file lines ({len(lines)})")
+        raise PatchValidationError(
+            f"Finding start_line {start_line} is outside file lines ({len(lines)})"
+        )
 
     # 1-indexed to 0-indexed slice
     slice_start = start_line - 1
@@ -95,4 +112,5 @@ def create_patch_for_finding(
         title=title or f"Fix: {finding.title}",
         description=description or (finding.recommendation or finding.explanation),
         finding_id=finding.finding_id,
+        original_file_sha256=original_sha256,
     )

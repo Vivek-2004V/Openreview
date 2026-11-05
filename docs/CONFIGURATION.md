@@ -46,8 +46,12 @@ endpoint = "http://127.0.0.1:11434"
 max_context_tokens = 4000
 
 [privacy]
-# Automatically redact API keys, passwords, and tokens before model dispatch
+# Automatically redact API keys, passwords, and tokens before model dispatch (regex heuristic)
 redact_secrets = true
+
+# Strictly enforce that the AI endpoint is a local loopback address (127.0.0.1, localhost)
+# Blocks remote endpoints to prevent accidental network transmission of source code
+enforce_local_ai = false
 
 [reports]
 # Default report format(s): "markdown", "json", or "both"

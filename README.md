@@ -22,9 +22,9 @@ OpenReview AI runs deterministic static linters (Ruff, ESLint, Bandit, Semgrep, 
 
 ## Key Features
 
-- **100% Local & Air-Gapped Ready:** Source code never leaves your workstation. Zero remote telemetry.
+- **Local-First & Air-Gap Capable:** Zero telemetry. Core review engine, deterministic linters, and default local AI operate on-device without remote calls. (See [Privacy Architecture](docs/PRIVACY.md) for endpoint and boundary specifics).
 - **Deterministic-First:** Hard compiler/linter diagnostics (`origin: static`) are strictly separated from local AI suggestions (`origin: ai`, `status: unverified`).
-- **Secret Redaction:** High-risk credentials (AWS keys, GitHub PATs, JWTs, private keys, passwords) are automatically redacted before model dispatch and logging.
+- **Secret Redaction (Defense-in-Depth):** High-risk credentials (AWS keys, GitHub PATs, JWTs, private keys, passwords) are automatically redacted before model dispatch and logging using regex-based pattern matching.
 - **Path Traversal & Command Injection Defense:** Strict boundary containment blocks directory traversal and command injection.
 - **Performance Optimized:** Sub-20ms engine overhead. Diff parsing, hashing, and report rendering execute in single-digit milliseconds.
 - **GitHub App & Webhook Integration:** Constant-time HMAC-SHA256 signature verification, idempotent review queue, isolated sandbox worker, and diff-mapped inline comments.

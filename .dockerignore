@@ -1,0 +1,68 @@
+# ==============================================================================
+# OpenReview AI - Docker Build Ignore Specification
+# ==============================================================================
+
+# Version Control
+.git/
+.gitignore
+.gitattributes
+
+# Virtual Environments
+.venv/
+venv/
+ENV/
+env/
+
+# Python Caches & Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Test & Coverage Caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# Build Artifacts
+build/
+dist/
+*.egg-info/
+
+# Secrets & Environment Files
+.env
+.env.*
+*.pem
+*.key
+*.cert
+*.crt
+secrets/
+deploy/secrets/
+
+# Databases & Runtime State
+*.sqlite
+*.sqlite3
+*.db
+rea/.turbo/
+rea/.cache/
+
+# Temporary Files & Logs
+*.log
+sandbox/
+tmp/
+temp/
+docker-output/
+openreview_patch_sandbox_*
+openreview_sandbox_out_*
+
+# OS Files & IDEs
+.DS_Store
+.idea/
+.vscode/
+
+# Documentation packs not needed in container runtime
+OpenReviewAI_Vibe_Coding_Document_Pack/
+

@@ -1,0 +1,18 @@
+FROM python:3.13-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+RUN groupadd -g 10001 validator && \
+    useradd -m -u 10001 -g 10001 validator && \
+    (groupadd -g 1000 appuser || true) && \
+    (useradd -m -u 1000 -g 1000 appuser || true)
+
+WORKDIR /workspace
+RUN chown -R validator:validator /workspace && chmod 777 /workspace
+
+RUN pip install --no-cache-dir pytest ruff
+
+USER validator
+
+CMD ["python", "--version"]
