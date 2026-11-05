@@ -99,3 +99,7 @@ Thumbs.db
 *.swp
 *.swo
 *~
+
+# Internal scaffolding & prompt packs
+OpenReviewAI_Vibe_Coding_Document_Pack/
+
