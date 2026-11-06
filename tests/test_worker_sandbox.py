@@ -194,7 +194,22 @@ def test_docker_sandbox_runner_failure_cases(tmp_path: Path):
             config=OpenReviewConfig(),
         )
 
-    # 2. Non-zero container exit code
+    # 2. Missing container image in docker cache
+    with (
+        patch.object(runner, "is_available", return_value=True),
+        patch.object(runner, "image_exists", return_value=False),
+        pytest.raises(
+            SandboxExecutionError, match="is not found in local Docker cache"
+        ),
+    ):
+        runner.run_review_in_sandbox(
+            sandbox_path=sandbox_path,
+            base_sha="base",
+            head_sha="head",
+            config=OpenReviewConfig(),
+        )
+
+    # 3. Non-zero container exit code
     mock_fail = MagicMock()
     mock_fail.returncode = 137
     mock_fail.stdout = ""
@@ -202,6 +217,7 @@ def test_docker_sandbox_runner_failure_cases(tmp_path: Path):
 
     with (
         patch.object(runner, "is_available", return_value=True),
+        patch.object(runner, "image_exists", return_value=True),
         patch("subprocess.run", return_value=mock_fail),
         pytest.raises(
             SandboxExecutionError, match="Container sandbox review failed.*OOMKilled"

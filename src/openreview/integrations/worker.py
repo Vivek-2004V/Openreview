@@ -37,7 +37,7 @@ class ReviewWorker:
         repo_fetcher: Callable[[ReviewJob, Path], None] | None = None,
         sandbox_runner: SandboxRunner | None = None,
         sandbox_config: ContainerSandboxConfig | None = None,
-        require_container: bool = False,
+        require_container: bool | None = None,
         github_client: GitHubClient | None = None,
         app_auth: Any | None = None,
     ) -> None:
@@ -45,7 +45,14 @@ class ReviewWorker:
         self.config = config
         self._repo_fetcher = repo_fetcher or self._default_fetch_repo
         self.sandbox_config = sandbox_config or ContainerSandboxConfig()
-        self.require_container = require_container
+
+        if require_container is not None:
+            self.require_container = require_container
+        else:
+            self.require_container = getattr(
+                getattr(config, "sandbox", None), "require_container", False
+            )
+
         self.github_client = github_client
         self.app_auth = app_auth
 
@@ -53,17 +60,28 @@ class ReviewWorker:
             self.sandbox_runner = sandbox_runner
         else:
             docker_runner = DockerSandboxRunner(config=self.sandbox_config)
-            if docker_runner.is_available():
+            is_ready = docker_runner.is_available() and docker_runner.image_exists()
+            if is_ready:
                 self.sandbox_runner = docker_runner
-            elif require_container:
-                raise SandboxSecurityError(
-                    "Real container sandbox is required for ReviewWorker, "
-                    "but Docker/container isolation runtime is not available."
-                )
+            elif self.require_container:
+                if not docker_runner.is_available():
+                    raise SandboxSecurityError(
+                        "Real container sandbox is required for ReviewWorker (OPENREVIEW_REQUIRE_CONTAINER=true), "
+                        "but Docker runtime is not installed or daemon is unreachable. "
+                        "Refusing to execute untrusted code on host."
+                    )
+                else:
+                    raise SandboxSecurityError(
+                        f"Real container sandbox is required for ReviewWorker (OPENREVIEW_REQUIRE_CONTAINER=true), "
+                        f"but container image '{self.sandbox_config.image}' is missing in local Docker cache. "
+                        f"Refusing to execute untrusted code on host."
+                    )
             else:
                 logger.warning(
-                    "Docker runtime not available. ReviewWorker falling back to LocalSandboxRunner. "
-                    "For untrusted/public PRs, a container isolation runtime (Docker/gVisor) is required."
+                    "Docker runtime or container image '%s' not available. "
+                    "ReviewWorker falling back to LocalSandboxRunner. "
+                    "For untrusted/public PRs, a container isolation runtime (Docker/gVisor) is required.",
+                    self.sandbox_config.image,
                 )
                 self.sandbox_runner = LocalSandboxRunner()
 

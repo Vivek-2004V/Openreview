@@ -15,10 +15,12 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
 import tempfile
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, runtime_checkable
@@ -35,6 +37,31 @@ FORBIDDEN_SECRET_PATTERN = re.compile(
     r"(TOKEN|SECRET|KEY|PASSWORD|CREDENTIAL|AUTH|BEARER|GITHUB_PAT)",
     re.IGNORECASE,
 )
+
+
+def ensure_directory_accessible_to_container(path: Path) -> None:
+    """Ensure directory and all its files/subdirs are readable/searchable by non-root container users."""
+    try:
+        resolved = Path(path).resolve()
+        try:
+            resolved.chmod(resolved.stat().st_mode | 0o755)
+        except OSError:
+            pass
+        for root, dirs, files in os.walk(resolved):
+            cur = Path(root)
+            try:
+                cur.chmod(cur.stat().st_mode | 0o755)
+            except OSError:
+                pass
+            for f in files:
+                fpath = cur / f
+                try:
+                    if not fpath.is_symlink():
+                        fpath.chmod(fpath.stat().st_mode | 0o644)
+                except OSError:
+                    pass
+    except OSError:
+        pass
 
 
 class SandboxSecurityError(PermissionError):
@@ -173,6 +200,38 @@ class DockerSandboxRunner(SandboxRunner):
         except (OSError, subprocess.SubprocessError):
             return False
 
+    def image_exists(self) -> bool:
+        """Check whether the configured container image is present in local docker cache."""
+        docker_bin = shutil.which("docker")
+        if not docker_bin:
+            return False
+        try:
+            res = subprocess.run(
+                [docker_bin, "image", "inspect", self.sandbox_config.image],
+                check=False,
+                capture_output=True,
+                timeout=3.0,
+            )
+            return res.returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+    @staticmethod
+    def _force_cleanup_container(container_name: str, timeout: float = 3.0) -> None:
+        """Forcefully remove Docker container if it exists."""
+        docker_bin = shutil.which("docker")
+        if not docker_bin:
+            return
+        try:
+            subprocess.run(
+                [docker_bin, "rm", "-f", container_name],
+                check=False,
+                capture_output=True,
+                timeout=timeout,
+            )
+        except (OSError, subprocess.SubprocessError):
+            pass
+
     def build_docker_command(
         self,
         sandbox_path: Path,
@@ -180,6 +239,7 @@ class DockerSandboxRunner(SandboxRunner):
         base_sha: str,
         head_sha: str,
         config: OpenReviewConfig,
+        container_name: str | None = None,
     ) -> list[str]:
         """Construct deterministic docker run command with strictly hardened security flags."""
         self.sandbox_config.validate_security_invariants()
@@ -190,6 +250,10 @@ class DockerSandboxRunner(SandboxRunner):
             "docker",
             "run",
             "--rm",
+        ]
+        if container_name:
+            cmd.extend(["--name", container_name])
+        cmd.extend([
             "--network",
             "none",
             "--user",
@@ -204,7 +268,7 @@ class DockerSandboxRunner(SandboxRunner):
             self.sandbox_config.memory_limit,
             "--pids-limit",
             str(self.sandbox_config.pids_limit),
-        ]
+        ])
 
         if self.sandbox_config.read_only_rootfs:
             cmd.append("--read-only")
@@ -283,15 +347,26 @@ class DockerSandboxRunner(SandboxRunner):
                 "Docker executable is not installed or available in PATH. "
                 "A real container sandbox runtime is required for secure review execution."
             )
+        if not self.image_exists():
+            raise SandboxExecutionError(
+                f"Container image '{self.sandbox_config.image}' is not found in local Docker cache. "
+                "Build or pull the image before running container reviews."
+            )
+
+        container_name = f"openreview_rev_{uuid.uuid4().hex[:12]}"
 
         with tempfile.TemporaryDirectory(prefix="openreview_sandbox_out_") as out_temp:
             out_dir = Path(out_temp).resolve()
+            ensure_directory_accessible_to_container(sandbox_path)
+            ensure_directory_accessible_to_container(out_dir)
+
             cmd = self.build_docker_command(
                 sandbox_path=sandbox_path,
                 output_dir=out_dir,
                 base_sha=base_sha,
                 head_sha=head_sha,
                 config=config,
+                container_name=container_name,
             )
 
             effective_timeout = timeout_seconds or self.sandbox_config.timeout_seconds
@@ -305,13 +380,17 @@ class DockerSandboxRunner(SandboxRunner):
                     check=False,
                 )
             except subprocess.TimeoutExpired as exc:
+                self._force_cleanup_container(container_name)
                 raise SandboxExecutionError(
                     f"Container sandbox execution timed out after {effective_timeout} seconds."
                 ) from exc
             except Exception as exc:
+                self._force_cleanup_container(container_name)
                 raise SandboxExecutionError(
                     f"Subprocess failed while launching container sandbox: {exc}"
                 ) from exc
+            finally:
+                self._force_cleanup_container(container_name)
 
             if proc.returncode != 0:
                 err_detail = (

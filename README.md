@@ -135,7 +135,7 @@ pytest -v tests/integration/test_docker_sandbox.py
 - **`tests/`**: Unit tests and `tests/integration/` (live Docker execution tests).
 - **`deploy/`**: Production server `Dockerfile`, `docker-compose.yml`, and `openreview.service`.
 - **`rea/`**: Git submodule pointing to [`https://github.com/morluto/rea`](https://github.com/morluto/rea) (REA binary inspection engine).
-- **`OpenReviewAI_Vibe_Coding_Document_Pack/`**: Initial architecture briefs, task backlogs, and loop engineering specifications preserved for reference.
+- **`docs/`**: Architectural Decision Records (ADRs), execution guides, `PROGRESS.md`, and specifications in `docs/spec/`.
 
 ---
 

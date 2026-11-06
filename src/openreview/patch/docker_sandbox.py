@@ -66,6 +66,31 @@ def get_directory_size_bytes(directory: Path) -> int:
     return total
 
 
+def ensure_directory_accessible_to_container(path: Path) -> None:
+    """Ensure directory and all its files/subdirs are readable/searchable by non-root container users."""
+    try:
+        resolved = Path(path).resolve()
+        try:
+            resolved.chmod(resolved.stat().st_mode | 0o755)
+        except OSError:
+            pass
+        for root, dirs, files in os.walk(resolved):
+            cur = Path(root)
+            try:
+                cur.chmod(cur.stat().st_mode | 0o755)
+            except OSError:
+                pass
+            for f in files:
+                fpath = cur / f
+                try:
+                    if not fpath.is_symlink():
+                        fpath.chmod(fpath.stat().st_mode | 0o644)
+                except OSError:
+                    pass
+    except OSError:
+        pass
+
+
 @dataclass(frozen=True)
 class DockerSandboxConfig:
     """Security and resource limits configuration for patch validation in Docker."""
@@ -346,6 +371,7 @@ class DockerSandboxRunner:
         container_name = f"openreview_val_{uuid.uuid4().hex[:12]}"
 
         try:
+            ensure_directory_accessible_to_container(repository_snapshot)
             cmd = self.build_docker_command(
                 snapshot_path=repository_snapshot,
                 test_command=test_command,

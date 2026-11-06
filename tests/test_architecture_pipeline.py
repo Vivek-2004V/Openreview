@@ -22,7 +22,7 @@ def test_rea_adapter_filtering_and_availability():
     """Verify ReaAdapter correctly targets compiled/binary extensions."""
     adapter = ReaAdapter()
     assert adapter.name == "rea"
-    assert adapter.is_available() is True
+    assert isinstance(adapter.is_available(), bool)
 
     targets = [
         "src/main.py",

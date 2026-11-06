@@ -132,7 +132,7 @@ def is_loopback_endpoint(endpoint: str) -> bool:
         if not hostname:
             return False
         hostname = hostname.lower().strip("[]")
-        if hostname == "localhost":
+        if hostname in ("localhost", "host.docker.internal", "ollama"):
             return True
         try:
             ip = ipaddress.ip_address(hostname)

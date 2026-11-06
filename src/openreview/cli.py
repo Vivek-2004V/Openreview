@@ -267,6 +267,7 @@ def run_doctor(verbose: bool = False) -> int:
         ("Bandit (Python AST)", "bandit"),
         ("Semgrep (SAST)", "semgrep"),
         ("Ollama (Local AI)", "ollama"),
+        ("Docker (Sandbox)", "docker"),
     ]
 
     print("OpenReview AI Environment Doctor:")
@@ -300,37 +301,47 @@ def run_server(args: argparse.Namespace) -> int:
     """Run production GitHub App webhook server and optional review worker."""
     import os
 
-    from openreview.config import ConfigError, OpenReviewConfig, load_config
+    from openreview.config import ConfigError, load_config
     from openreview.integrations import (
         GitHubAppAuth,
         GitHubWebhookServer,
         ReviewJobQueue,
         ReviewWorker,
     )
+    from openreview.integrations.sandbox import DockerSandboxRunner, SandboxSecurityError
+    from openreview.logging import configure_logging
 
-    secret = getattr(args, "secret", None) or os.environ.get("GITHUB_WEBHOOK_SECRET")
+    config_path = getattr(args, "config", None)
+    try:
+        cfg = load_config(path=config_path)
+    except ConfigError as exc:
+        sys.stderr.write(f"Configuration error: {exc}\n")
+        return EXIT_INVALID_INPUT_OR_CONFIG
+
+    # Configure logging using centralized log_level unless verbose flag is active
+    configure_logging(
+        verbose=getattr(args, "verbose", False),
+        level=cfg.server.log_level,
+    )
+
+    secret = (
+        getattr(args, "secret", None)
+        or cfg.server.webhook_secret
+        or os.environ.get("GITHUB_WEBHOOK_SECRET")
+    )
     if not secret:
         sys.stderr.write(
             "Error: Webhook secret must be provided via --secret or GITHUB_WEBHOOK_SECRET environment variable.\n"
         )
         return EXIT_INVALID_INPUT_OR_CONFIG
 
-    config_path = getattr(args, "config", None)
-    try:
-        cfg = load_config(path=config_path) if config_path else OpenReviewConfig()
-    except ConfigError as exc:
-        sys.stderr.write(f"Configuration error: {exc}\n")
-        return EXIT_INVALID_INPUT_OR_CONFIG
-
-    db_path = getattr(args, "db", None) or os.environ.get(
-        "OPENREVIEW_JOBS_DB", "openreview_jobs.db"
-    )
+    host = getattr(args, "host", None) or cfg.server.host
+    port = getattr(args, "port", None) or cfg.server.port
+    db_path = getattr(args, "db", None) or cfg.server.jobs_db or "openreview_jobs.db"
     queue = ReviewJobQueue(db_path=db_path)
 
-    app_id = getattr(args, "app_id", None) or os.environ.get("GITHUB_APP_ID")
-    private_key_path = getattr(args, "private_key", None) or os.environ.get(
-        "GITHUB_PRIVATE_KEY_PATH"
-    )
+    app_id = getattr(args, "app_id", None) or cfg.server.app_id
+    private_key_path = getattr(args, "private_key", None) or cfg.server.private_key_path
 
     app_auth = None
     if app_id and private_key_path:
@@ -342,19 +353,35 @@ def run_server(args: argparse.Namespace) -> int:
                 f"Warning: Failed to initialize GitHub App authentication: {exc}\n"
             )
 
+    # Fail-closed check if container sandbox is strictly required
+    if cfg.sandbox.require_container:
+        docker_runner = DockerSandboxRunner()
+        if not docker_runner.is_available():
+            sys.stderr.write(
+                "Security Error: OPENREVIEW_REQUIRE_CONTAINER=true is configured, "
+                "but Docker executable or daemon is unreachable. "
+                "Refusing to start server in unsafe execution mode.\n"
+            )
+            return EXIT_INVALID_INPUT_OR_CONFIG
+
     worker = None
     if getattr(args, "worker", True):
-        worker = ReviewWorker(
-            queue=queue,
-            config=cfg,
-            app_auth=app_auth,
-        )
+        try:
+            worker = ReviewWorker(
+                queue=queue,
+                config=cfg,
+                require_container=cfg.sandbox.require_container,
+                app_auth=app_auth,
+            )
+        except SandboxSecurityError as exc:
+            sys.stderr.write(f"Security Error initializing review worker: {exc}\n")
+            return EXIT_INVALID_INPUT_OR_CONFIG
 
     server = GitHubWebhookServer(
         queue=queue,
         webhook_secret=secret,
-        host=getattr(args, "host", "0.0.0.0"),
-        port=getattr(args, "port", 8000),
+        host=host,
+        port=port,
         worker=worker,
         app_auth=app_auth,
     )

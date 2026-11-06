@@ -58,10 +58,22 @@ def configure_logging(
     verbose: bool = False,
     log_file: Path | str | None = None,
     json_format: bool = False,
+    level: str | int | None = None,
 ) -> None:
     """Configure openreview logger with redaction filter and appropriate formatter."""
     logger = logging.getLogger("openreview")
-    logger.setLevel(logging.DEBUG if verbose else logging.INFO)
+
+    if verbose:
+        resolved_level = logging.DEBUG
+    elif level is not None:
+        if isinstance(level, str):
+            resolved_level = getattr(logging, level.upper(), logging.INFO)
+        else:
+            resolved_level = level
+    else:
+        resolved_level = logging.INFO
+
+    logger.setLevel(resolved_level)
 
     # Remove existing handlers to avoid duplicates
     for handler in list(logger.handlers):

@@ -299,8 +299,15 @@ class SandboxPatchTester:
                     scanner_status = scan_res.status
                 new_findings.extend(scan_res.findings)
 
+            effective_require_docker = (
+                require_docker
+                or (config is not None and getattr(config.sandbox, "require_container", False))
+                or os.environ.get("OPENREVIEW_REQUIRE_CONTAINER", "").lower()
+                in ("true", "1", "yes")
+            )
+
             # 7. Validation Execution (Docker Sandbox for any untrusted test execution)
-            if require_docker or runner is not None or test_command is not None:
+            if effective_require_docker or runner is not None or test_command is not None:
                 docker_runner = runner or DockerSandboxRunner()
                 if not docker_runner.is_available():
                     duration = time.perf_counter() - start_time
