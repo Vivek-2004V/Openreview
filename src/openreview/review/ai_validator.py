@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Sequence
 
@@ -14,6 +15,9 @@ from openreview.schemas.models import (
     FindingStatus,
     Severity,
 )
+from openreview.security.ai_safety import validate_ai_finding_content
+
+logger = logging.getLogger(__name__)
 
 
 def normalize_relpath(path_str: str) -> str:
@@ -93,6 +97,20 @@ def validate_and_convert_ai_suggestions(
         title = sugg.title.strip()
         explanation = sugg.explanation.strip()
         if not title or not explanation:
+            continue
+
+        # 2b. AI Safety: Reject findings echoing prompt injection or dangerous shell execution
+        is_safe, safety_reason = validate_ai_finding_content(
+            title=title,
+            explanation=explanation,
+            recommendation=sugg.recommendation,
+        )
+        if not is_safe:
+            logger.warning(
+                "Dropping unsafe AI suggestion for '%s': %s",
+                matching_diff.path,
+                safety_reason,
+            )
             continue
 
         start_line = sugg.start_line

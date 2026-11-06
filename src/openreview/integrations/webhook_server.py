@@ -18,8 +18,20 @@ from openreview.integrations.github_webhook import (
 )
 from openreview.integrations.job_queue import ReviewJobQueue
 from openreview.integrations.worker import ReviewWorker
+from openreview.security.auth import (
+    AuthenticationError,
+    AuthorizationError,
+    authorize_job_access,
+    verify_access_token,
+)
+from openreview.security.rate_limiter import (
+    SlidingWindowRateLimiter,
+    get_client_ip,
+)
 
 logger = logging.getLogger(__name__)
+
+MAX_PAYLOAD_BYTES = 10 * 1024 * 1024  # 10 MB limit to prevent memory exhaustion DoS
 
 
 class WebhookRequestHandler(BaseHTTPRequestHandler):
@@ -27,17 +39,53 @@ class WebhookRequestHandler(BaseHTTPRequestHandler):
 
     server: WebhookHTTPServer  # type annotation for custom server
 
-    def _send_json_response(self, status_code: int, data: dict[str, Any]) -> None:
-        """Send formatted JSON HTTP response."""
+    def _send_json_response(
+        self,
+        status_code: int,
+        data: dict[str, Any],
+        extra_headers: dict[str, str] | None = None,
+    ) -> None:
+        """Send formatted JSON HTTP response with production security headers."""
         resp_bytes = json.dumps(data).encode("utf-8")
         self.send_response(status_code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(resp_bytes)))
+        self.send_header(
+            "Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'"
+        )
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header(
+            "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+        )
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+        if extra_headers:
+            for k, v in extra_headers.items():
+                self.send_header(k, v)
         self.end_headers()
         self.wfile.write(resp_bytes)
 
+    def _check_rate_limit(self) -> bool:
+        """Enforce rate limits per client IP if rate limiter is configured."""
+        if getattr(self.server, "rate_limiter", None) is None:
+            return True
+
+        client_ip = get_client_ip(dict(self.headers), self.client_address)
+        allowed, remaining, retry_after = self.server.rate_limiter.is_allowed(client_ip)
+        if not allowed:
+            self._send_json_response(
+                429,
+                {"error": "Too Many Requests", "retry_after": retry_after},
+                extra_headers={"Retry-After": str(int(retry_after) or 1)},
+            )
+            return False
+        return True
+
     def do_GET(self) -> None:
         """Handle health check and status probes."""
+        if not self._check_rate_limit():
+            return
+
         path = self.path.split("?")[0].rstrip("/")
 
         if path in ("/health", "/healthz", ""):
@@ -74,16 +122,42 @@ class WebhookRequestHandler(BaseHTTPRequestHandler):
         if path.startswith("/jobs/"):
             job_id = path[len("/jobs/") :]
             job = self.server.queue.get_job(job_id)
-            if job:
-                self._send_json_response(200, job.to_dict())
-            else:
+            if not job:
                 self._send_json_response(404, {"error": f"Job not found: {job_id}"})
+                return
+
+            if getattr(self.server, "api_secret", None):
+                auth_header = self.headers.get("Authorization", "")
+                if not auth_header.startswith("Bearer "):
+                    self._send_json_response(
+                        401, {"error": "Missing Bearer authorization token"}
+                    )
+                    return
+                token = auth_header[len("Bearer ") :].strip()
+                try:
+                    claims = verify_access_token(token, self.server.api_secret)
+                    if not authorize_job_access(claims, job_id, job.repo_full_name):
+                        self._send_json_response(
+                            403, {"error": "Forbidden: Access denied to requested job"}
+                        )
+                        return
+                except AuthenticationError as exc:
+                    self._send_json_response(401, {"error": f"Unauthorized: {exc}"})
+                    return
+                except AuthorizationError as exc:
+                    self._send_json_response(403, {"error": f"Forbidden: {exc}"})
+                    return
+
+            self._send_json_response(200, job.to_dict())
             return
 
         self._send_json_response(404, {"error": "Not found"})
 
     def do_POST(self) -> None:
         """Handle incoming GitHub webhook POST deliveries."""
+        if not self._check_rate_limit():
+            return
+
         path = self.path.split("?")[0].rstrip("/")
         if path not in ("/webhook", "/api/webhook", ""):
             self._send_json_response(
@@ -99,6 +173,15 @@ class WebhookRequestHandler(BaseHTTPRequestHandler):
 
         if content_length <= 0:
             self._send_json_response(400, {"error": "Empty webhook payload"})
+            return
+
+        if content_length > MAX_PAYLOAD_BYTES:
+            self._send_json_response(
+                413,
+                {
+                    "error": f"Payload Too Large: {content_length} bytes exceeds maximum allowed limit of {MAX_PAYLOAD_BYTES} bytes"
+                },
+            )
             return
 
         payload_bytes = self.rfile.read(content_length)
@@ -119,8 +202,8 @@ class WebhookRequestHandler(BaseHTTPRequestHandler):
             self._send_json_response(400, {"error": f"Bad Request: {exc}"})
             return
         except (ValueError, OSError) as exc:
-            logger.error("Unexpected error parsing webhook request: %s", exc)
-            self._send_json_response(500, {"error": f"Internal server error: {exc}"})
+            logger.exception("Unexpected error parsing webhook request: %s", exc)
+            self._send_json_response(500, {"error": "Internal server error"})
             return
 
         # 1. Handle ping event
@@ -217,7 +300,7 @@ class WebhookRequestHandler(BaseHTTPRequestHandler):
 
 
 class WebhookHTTPServer(ThreadingHTTPServer):
-    """Custom ThreadingHTTPServer holding queue and authentication context."""
+    """Custom ThreadingHTTPServer holding queue, rate limiter, and authentication context."""
 
     def __init__(
         self,
@@ -226,11 +309,15 @@ class WebhookHTTPServer(ThreadingHTTPServer):
         queue: ReviewJobQueue,
         webhook_secret: str,
         app_auth: GitHubAppAuth | None = None,
+        rate_limiter: SlidingWindowRateLimiter | None = None,
+        api_secret: str | None = None,
     ) -> None:
         super().__init__(server_address, RequestHandlerClass)
         self.queue = queue
         self.webhook_secret = webhook_secret
         self.app_auth = app_auth
+        self.rate_limiter = rate_limiter
+        self.api_secret = api_secret
 
 
 class GitHubWebhookServer:
@@ -244,6 +331,8 @@ class GitHubWebhookServer:
         port: int = 8000,
         worker: ReviewWorker | None = None,
         app_auth: GitHubAppAuth | None = None,
+        rate_limiter: SlidingWindowRateLimiter | None = None,
+        api_secret: str | None = None,
     ) -> None:
         self.queue = queue
         self.webhook_secret = webhook_secret
@@ -251,6 +340,8 @@ class GitHubWebhookServer:
         self.port = port
         self.worker = worker
         self.app_auth = app_auth
+        self.rate_limiter = rate_limiter
+        self.api_secret = api_secret
 
         if not self.webhook_secret or not self.webhook_secret.strip():
             raise ValueError(
@@ -263,6 +354,8 @@ class GitHubWebhookServer:
             queue=self.queue,
             webhook_secret=self.webhook_secret,
             app_auth=self.app_auth,
+            rate_limiter=self.rate_limiter,
+            api_secret=self.api_secret,
         )
 
         self.server_port = self._server.server_port

@@ -28,6 +28,10 @@ from openreview.adapters.ai_base import (
     CodeContextBlock,
 )
 from openreview.schemas.models import Confidence, Severity
+from openreview.security.ai_safety import (
+    detect_prompt_injection,
+    sanitize_prompt_text,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -62,17 +66,31 @@ Return a JSON array of finding objects. Each object MUST have:
 def build_review_prompt(
     blocks: list[CodeContextBlock], custom_instructions: str = ""
 ) -> str:
-    """Format review context blocks safely into an isolated review prompt."""
+    """Format review context blocks safely into an isolated review prompt with injection neutralization."""
     parts = []
     if custom_instructions:
-        parts.append(f"Additional Instructions:\n{custom_instructions}\n")
+        injections = detect_prompt_injection(custom_instructions)
+        if injections:
+            logger.warning(
+                "Potential prompt injection pattern detected in custom instructions: %s",
+                injections,
+            )
+        parts.append(f"Additional Instructions:\n{sanitize_prompt_text(custom_instructions)}\n")
 
     parts.append("Code Context to Review:\n")
     for block in blocks:
+        injections = detect_prompt_injection(block.content)
+        if injections:
+            logger.warning(
+                "Prompt injection pattern detected in code block '%s': %s",
+                block.path,
+                injections,
+            )
+        sanitized_content = sanitize_prompt_text(block.content)
         parts.append(
             f'<code_context path="{block.path}" start_line="{block.start_line}" end_line="{block.end_line}">'
         )
-        parts.append(block.content)
+        parts.append(sanitized_content)
         parts.append("</code_context>\n")
 
     parts.append(
@@ -141,6 +159,9 @@ def is_loopback_endpoint(endpoint: str) -> bool:
             return False
     except (ValueError, TypeError, AttributeError):
         return False
+
+
+MAX_AI_RESPONSE_BYTES = 5 * 1024 * 1024  # 5 MB limit on model output to prevent memory exhaustion
 
 
 class OllamaAdapter:
@@ -270,7 +291,16 @@ class OllamaAdapter:
                         duration_seconds=duration,
                         error_message=f"Ollama returned HTTP status {status_code}",
                     )
-                resp_body = resp.read().decode("utf-8", errors="replace")
+                raw_bytes = resp.read(MAX_AI_RESPONSE_BYTES + 1)
+                if len(raw_bytes) > MAX_AI_RESPONSE_BYTES:
+                    return AIReviewResponse(
+                        provider_name=self.name,
+                        model_name=model_name,
+                        status=AIStatus.ERROR,
+                        duration_seconds=duration,
+                        error_message="AI response exceeded maximum safe size limit of 5MB",
+                    )
+                resp_body = raw_bytes.decode("utf-8", errors="replace")
         except urllib.error.HTTPError as exc:
             duration = time.perf_counter() - start_time
             return AIReviewResponse(

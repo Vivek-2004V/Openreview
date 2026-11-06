@@ -66,7 +66,7 @@ class ReportsConfig:
 
 @dataclass(frozen=True)
 class ServerConfig:
-    """GitHub App webhook server and queue persistence settings."""
+    """GitHub App webhook server, API auth, and queue persistence settings."""
 
     host: str = "0.0.0.0"
     port: int = 8000
@@ -75,6 +75,8 @@ class ServerConfig:
     webhook_secret: str = ""
     app_id: str | None = None
     private_key_path: str | None = None
+    api_secret: str | None = None
+    rate_limit: int = 60
 
 
 @dataclass(frozen=True)
@@ -147,6 +149,8 @@ ALLOWED_SECTIONS: dict[str, dict[str, type | tuple[type, ...]]] = {
         "webhook_secret": str,
         "app_id": (str, type(None)),
         "private_key_path": (str, type(None)),
+        "api_secret": (str, type(None)),
+        "rate_limit": int,
     },
     "sandbox": {
         "require_container": bool,
@@ -459,6 +463,17 @@ def load_config_from_env(
     webhook_secret = e.get("GITHUB_WEBHOOK_SECRET", cfg.server.webhook_secret)
     app_id = e.get("GITHUB_APP_ID", cfg.server.app_id)
     private_key_path = e.get("GITHUB_PRIVATE_KEY_PATH", cfg.server.private_key_path)
+    api_secret = e.get("OPENREVIEW_API_SECRET", cfg.server.api_secret)
+    try:
+        rate_limit = (
+            int(e["OPENREVIEW_RATE_LIMIT"])
+            if "OPENREVIEW_RATE_LIMIT" in e
+            else cfg.server.rate_limit
+        )
+    except ValueError as exc:
+        raise ConfigError(
+            f"Invalid OPENREVIEW_RATE_LIMIT '{e['OPENREVIEW_RATE_LIMIT']}': must be an integer"
+        ) from exc
 
     server_cfg = ServerConfig(
         host=server_host,
@@ -468,6 +483,8 @@ def load_config_from_env(
         webhook_secret=webhook_secret,
         app_id=app_id,
         private_key_path=private_key_path,
+        api_secret=api_secret,
+        rate_limit=rate_limit,
     )
 
     # 7. Sandbox settings
