@@ -20,7 +20,6 @@ from openreview.config import (
 from openreview.integrations.github_webhook import verify_github_signature
 from openreview.integrations.job_queue import ReviewJobQueue
 from openreview.integrations.sandbox import (
-    DockerSandboxRunner,
     SandboxSecurityError,
 )
 from openreview.integrations.worker import ReviewWorker
@@ -209,15 +208,35 @@ def test_patch_tester_refuses_host_execution_when_docker_required(tmp_path: Path
         unified_diff="--- app.py\n+++ app.py\n@@ -1 +1 @@\n-x = 1\n+x = 2\n",
     )
 
-    with patch.object(DockerSandboxRunner, "is_available", return_value=False):
-        res = SandboxPatchTester.test_patch_in_sandbox(
-            repo_root=repo_dir,
-            proposal=proposal,
-            require_docker=True,
-        )
-        assert res.applies_cleanly is True
-        assert res.test_passed is False
-        assert "Refusing to execute untrusted code on host" in (res.error_message or "")
+    # 1. When Docker is not available
+    mock_runner_no_docker = MagicMock()
+    mock_runner_no_docker.is_available.return_value = False
+
+    res = SandboxPatchTester.test_patch_in_sandbox(
+        repo_root=repo_dir,
+        proposal=proposal,
+        runner=mock_runner_no_docker,
+        require_docker=True,
+    )
+    assert res.applies_cleanly is True
+    assert res.test_passed is False
+    assert "Refusing to execute untrusted code on host" in (res.error_message or "")
+
+    # 2. When Docker is available but validator image is missing
+    mock_runner_no_img = MagicMock()
+    mock_runner_no_img.is_available.return_value = True
+    mock_runner_no_img.image_exists.return_value = False
+    mock_runner_no_img.config.image = "openreview-patch-validator:latest"
+
+    res_no_img = SandboxPatchTester.test_patch_in_sandbox(
+        repo_root=repo_dir,
+        proposal=proposal,
+        runner=mock_runner_no_img,
+        require_docker=True,
+    )
+    assert res_no_img.applies_cleanly is True
+    assert res_no_img.test_passed is False
+    assert "is missing" in (res_no_img.error_message or "")
 
 
 def test_ollama_docker_networking_endpoints():
